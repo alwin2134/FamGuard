@@ -1,0 +1,20 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.famguard.agent.app-mergeReleaseResources-64:/values-hdpi-v4/values-hdpi-v4.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\Alwin\\.gradle\\caches\\8.14.3\\transforms\\f6965b2c364b0c1e5af95f5a73bf97d9\\transformed\\appcompat-1.1.0\\res\\values-hdpi-v4\\values-hdpi-v4.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endLines": "6",
+                        "endColumns": "13",
+                        "endOffsets": "327"
+                    }
+                }
+            ]
+        }
+    ]
+}
