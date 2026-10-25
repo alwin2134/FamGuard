@@ -44,6 +44,24 @@ jobs:
         run: |
           sed -i '/org.gradle.java.home/d' gradle.properties || true
 
+      - name: Determine Release Version
+        id: release_version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+            VER="${TAG#v}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+            VER="${TAG#v}"
+          else
+            TAG="v1.0.${{ github.run_number }}"
+            VER="1.0.${{ github.run_number }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version_name=$VER" >> $GITHUB_OUTPUT
+          echo "version_code=${{ github.run_number }}" >> $GITHUB_OUTPUT
+          echo "should_release=true" >> $GITHUB_OUTPUT
+
       - name: Build Android Release APKs
         env:
           # Securely injected from GitHub Actions Repository Secrets
@@ -51,7 +69,10 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: |
-          ./gradlew :apps:android-controller:app:assembleRelease :apps:android-agent:app:assembleRelease --stacktrace
+          ./gradlew :apps:android-controller:app:assembleRelease :apps:android-agent:app:assembleRelease \
+            -PversionName="${{ steps.release_version.outputs.version_name }}" \
+            -PversionCode="${{ steps.release_version.outputs.version_code }}" \
+            --stacktrace
 
       - name: Prepare Release Artifacts
         run: |
@@ -69,24 +90,12 @@ jobs:
           path: release-artifacts/
           retention-days: 14
 
-      - name: Determine Release Tag
-        id: release_tag
-        run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
-            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=v1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
-          fi
-          echo "should_release=true" >> $GITHUB_OUTPUT
-
       - name: Publish GitHub Release
-        if: steps.release_tag.outputs.should_release == 'true'
+        if: steps.release_version.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_tag.outputs.tag }}
-          name: FamGuard Release ${{ steps.release_tag.outputs.tag }}
+          tag_name: ${{ steps.release_version.outputs.tag }}
+          name: FamGuard Release ${{ steps.release_version.outputs.tag }}
           generate_release_notes: true
           draft: false
           prerelease: false

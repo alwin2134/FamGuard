@@ -27,12 +27,15 @@ android {
     namespace = "com.famguard.agent"
     compileSdk = 34
 
+    val appVersionName = project.findProperty("versionName") as String? ?: "1.0.0"
+    val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+
     defaultConfig {
         applicationId = "com.famguard.agent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -53,7 +56,6 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         debug {
-            applicationIdSuffix = ".debug"
         }
     }
 

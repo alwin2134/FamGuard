@@ -124,9 +124,23 @@ object AgentUpdateManager {
         onProgress: (Float) -> Unit
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val req = Request.Builder().url(downloadUrl).get().build()
             val destFile = File(context.cacheDir, fileName)
 
+            // If permission is not granted, prompt the user immediately before downloading
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+                withContext(Dispatchers.Main) {
+                    val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                }
+                return@withContext Result.failure(
+                    Exception("Please enable 'Allow from this source' in Settings, then tap Update Now to install.")
+                )
+            }
+
+            val req = Request.Builder().url(downloadUrl).get().build()
             httpClient.newCall(req).execute().use { response ->
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(Exception("Download failed HTTP ${response.code}"))
@@ -161,17 +175,6 @@ object AgentUpdateManager {
     }
 
     private fun installApk(context: Context, apkFile: File) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!context.packageManager.canRequestPackageInstalls()) {
-                val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                    data = Uri.parse("package:${context.packageName}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-                return
-            }
-        }
-
         val apkUri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
