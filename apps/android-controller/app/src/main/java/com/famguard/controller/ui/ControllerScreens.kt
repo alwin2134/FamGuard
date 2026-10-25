@@ -44,6 +44,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import android.widget.Toast
 import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
 import com.famguard.controller.config.ControllerConfigStore
 import com.famguard.controller.update.UpdateManager
 import com.famguard.controller.update.UpdateInfo
@@ -545,8 +547,25 @@ fun ControllerMainScreen(
                                     val res = apiClient.createPairing("11111111-1111-1111-1111-111111111111", targetDeviceNameInput)
                                     res.fold(
                                         onSuccess = { pairing ->
-                                            qrPayloadText = pairing.qrPayload
-                                            qrBitmap = QrCodeGenerator.generateQrBitmap(pairing.qrPayload)
+                                            val json = Json { ignoreUnknownKeys = true }
+                                            val parsed = try {
+                                                json.decodeFromString<QrPayload>(pairing.qrPayload)
+                                            } catch (e: Exception) {
+                                                null
+                                            }
+                                            val finalQrString = if (parsed != null) {
+                                                val serverToEmbed = if (parsed.serverUrl.isNotBlank()) parsed.serverUrl else currentConfigStore.getServerUrl()
+                                                val keyToEmbed = if (!parsed.anonKey.isNullOrBlank()) parsed.anonKey else currentConfigStore.getAnonKey()
+                                                val enriched = parsed.copy(
+                                                    serverUrl = serverToEmbed,
+                                                    anonKey = keyToEmbed
+                                                )
+                                                json.encodeToString(enriched)
+                                            } else {
+                                                pairing.qrPayload
+                                            }
+                                            qrPayloadText = finalQrString
+                                            qrBitmap = QrCodeGenerator.generateQrBitmap(finalQrString)
                                         },
                                         onFailure = { err ->
                                             qrError = "Failed to generate: ${err.message}"

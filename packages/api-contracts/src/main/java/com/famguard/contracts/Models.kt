@@ -203,7 +203,8 @@ data class QrPayload(
     @SerialName("family_id") val familyId: String,
     @SerialName("family_name") val familyName: String,
     @SerialName("guardian_name") val guardianName: String,
-    @SerialName("server_url") val serverUrl: String
+    @SerialName("server_url") val serverUrl: String,
+    @SerialName("anon_key") val anonKey: String? = null
 )
 
 @Serializable

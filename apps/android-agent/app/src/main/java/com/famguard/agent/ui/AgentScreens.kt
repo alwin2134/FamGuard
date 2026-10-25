@@ -664,13 +664,43 @@ fun AgentMainScreen(
                             Text("Scan QR", fontSize = 12.sp)
                         }
                     }
-                    OutlinedTextField(
-                        value = pairingPayloadJson,
-                        onValueChange = { pairingPayloadJson = it },
-                        label = { Text("QR Payload JSON") },
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 4
-                    )
+                    val parsedPreview = remember(pairingPayloadJson) {
+                        try {
+                            val j = Json { ignoreUnknownKeys = true }
+                            j.decodeFromString<QrPayload>(pairingPayloadJson.trim())
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+
+                    if (parsedPreview != null) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.CloudDone, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Backend Auto-Configured from QR", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                                }
+                                Text("Family: ${parsedPreview.familyName} (${parsedPreview.guardianName})", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                Text("Server: ${parsedPreview.serverUrl}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (!parsedPreview.anonKey.isNullOrBlank()) {
+                                    Text("API Key: Loaded from QR into Keystore", fontSize = 11.sp, color = Color(0xFF2E7D32))
+                                }
+                            }
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = pairingPayloadJson,
+                            onValueChange = { pairingPayloadJson = it },
+                            label = { Text("QR Payload JSON") },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 3
+                        )
+                    }
 
                     Text("Granular Permission Scopes:", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
 
@@ -706,6 +736,14 @@ fun AgentMainScreen(
                             try {
                                 val json = Json { ignoreUnknownKeys = true }
                                 val parsed = json.decodeFromString<QrPayload>(pairingPayloadJson.trim())
+
+                                // Automatically configure backend credentials from QR code
+                                if (parsed.serverUrl.isNotBlank()) {
+                                    val targetUrl = parsed.serverUrl.trim()
+                                    val targetKey = parsed.anonKey?.trim() ?: keystoreManager.getAnonKey()
+                                    keystoreManager.saveServerConfig(targetUrl, targetKey)
+                                    apiClient.updateCredentials(targetUrl, targetKey)
+                                }
 
                                 val model = "${Build.MANUFACTURER} ${Build.MODEL}"
                                 val osVersion = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"

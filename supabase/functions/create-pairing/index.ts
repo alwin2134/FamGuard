@@ -72,7 +72,8 @@ Deno.serve(async (req: Request) => {
       family_id,
       family_name: (member.families as any)?.name ?? 'FamGuard Family',
       guardian_name: member.display_name,
-      server_url: Deno.env.get('SUPABASE_URL') ?? ''
+      server_url: Deno.env.get('SUPABASE_URL') ?? '',
+      anon_key: Deno.env.get('SUPABASE_ANON_KEY') ?? ''
     });
 
     return new Response(JSON.stringify({
