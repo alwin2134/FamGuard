@@ -40,6 +40,10 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x gradlew
 
+      - name: Strip host-specific Gradle properties for CI
+        run: |
+          sed -i '/org.gradle.java.home/d' gradle.properties || true
+
       - name: Build Android Release APKs
         env:
           # Securely injected from GitHub Actions Repository Secrets
