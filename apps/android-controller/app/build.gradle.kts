@@ -47,6 +47,20 @@ android {
         manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
     }
 
+    signingConfigs {
+        create("release") {
+            val keystoreFile = rootProject.file("signing/famguard-release.jks")
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = "famguard123"
+                keyAlias = "famguard"
+                keyPassword = "famguard123"
+            } else {
+                initWith(getByName("debug"))
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -54,9 +68,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

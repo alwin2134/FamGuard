@@ -19,3 +19,4 @@ supabase/.temp/
 secrets.properties
 *.keystore
 *.jks
+!signing/famguard-release.jks
