@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "lib": ["ESNext", "DOM"],
+    "allowSyntheticDefaultImports": true,
+    "noImplicitAny": false,
+    "allowJs": true,
+    "skipLibCheck": true,
+    "isolatedModules": true
+  },
+  "include": [
+    "**/*.ts",
+    "ambient.d.ts"
+  ]
+}

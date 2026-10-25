@@ -1,8 +1,7 @@
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { authenticateGuardian, getServiceClient } from '../_shared/authHelper.ts';
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -11,8 +10,9 @@ serve(async (req: Request) => {
     const { user } = await authenticateGuardian(req);
     const { device_id, action, payload = {} } = await req.json();
 
-    if (!device_id || !action || !['refresh_location', 'ring'].includes(action)) {
-      return new Response(JSON.stringify({ error: 'Valid device_id and supported action (refresh_location, ring) required' }), {
+    const allowedActions = ['refresh_location', 'ring', 'lock_app', 'unlock_app', 'sync_activity', 'stop_location'];
+    if (!device_id || !action || !allowedActions.includes(action)) {
+      return new Response(JSON.stringify({ error: `Valid device_id and supported action (${allowedActions.join(', ')}) required` }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
@@ -77,6 +77,27 @@ serve(async (req: Request) => {
       .single();
 
     if (cmdErr || !command) throw cmdErr;
+
+    // Update locked_apps list on devices table for immediate guardian dashboard sync
+    try {
+      if (action === 'lock_app' && payload.package_name) {
+        const { data: dev } = await admin.from('devices').select('locked_apps').eq('id', device_id).single();
+        const currentLocked: string[] = Array.isArray(dev?.locked_apps) ? dev.locked_apps : [];
+        if (!currentLocked.includes(payload.package_name)) {
+          await admin.from('devices').update({ locked_apps: [...currentLocked, payload.package_name] }).eq('id', device_id);
+        }
+      } else if (action === 'unlock_app') {
+        if (payload.package_name === 'all') {
+          await admin.from('devices').update({ locked_apps: [] }).eq('id', device_id);
+        } else if (payload.package_name) {
+          const { data: dev } = await admin.from('devices').select('locked_apps').eq('id', device_id).single();
+          const currentLocked: string[] = Array.isArray(dev?.locked_apps) ? dev.locked_apps : [];
+          await admin.from('devices').update({ locked_apps: currentLocked.filter((p: string) => p !== payload.package_name) }).eq('id', device_id);
+        }
+      }
+    } catch (_ignore) {
+      // Best-effort cache update
+    }
 
     // Audit event
     await admin.from('audit_events').insert({

@@ -18,13 +18,26 @@ import com.famguard.contracts.DeviceCommandAckRequest
 import kotlinx.coroutines.*
 import org.json.JSONObject
 
+import com.famguard.agent.activity.ActivityRepository
+import com.famguard.agent.activity.AgentDatabase
+import com.famguard.agent.security.AppLockManager
+
 class CommandExecutor(
     private val context: Context,
     private val apiClient: AgentApiClient = AgentApiClient(),
-    private val keystoreManager: DeviceKeystoreManager = DeviceKeystoreManager(context)
+    private val keystoreManager: DeviceKeystoreManager = DeviceKeystoreManager(context),
+    private val appLockManager: AppLockManager = AppLockManager(context)
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var activeRingtone: Ringtone? = null
+    private val activityRepository by lazy {
+        ActivityRepository(
+            context = context,
+            database = AgentDatabase.getInstance(context),
+            keystoreManager = keystoreManager,
+            apiClient = apiClient
+        )
+    }
 
     suspend fun executeCommand(command: DeviceCommand): CommandStatus {
         val deviceId = keystoreManager.getDeviceId() ?: return CommandStatus.FAILED
@@ -46,7 +59,7 @@ class CommandExecutor(
         when (command.action) {
             CommandAction.REFRESH_LOCATION -> {
                 try {
-                    val payload = command.payloadJson?.let { JSONObject(it) }
+                    val payload = command.payloadJson?.let { JSONObject(it.toString()) }
                     val sessionId = payload?.optString("session_id")
                     val expiresAtIso = payload?.optString("expires_at")
 
@@ -77,10 +90,68 @@ class CommandExecutor(
                     failureReason = e.message
                 }
             }
+
+            CommandAction.LOCK_APP -> {
+                try {
+                    val payload = command.payloadJson?.let { JSONObject(it.toString()) }
+                    val pkg = payload?.optString("package_name") ?: ""
+                    if (pkg.isNotBlank()) {
+                        appLockManager.lockPackage(pkg)
+                        resultStatus = CommandStatus.SUCCEEDED
+                        android.util.Log.d("CommandExecutor", "Executed LOCK_APP for $pkg")
+                    } else {
+                        resultStatus = CommandStatus.FAILED
+                        failureReason = "Missing package_name in LOCK_APP payload"
+                    }
+                } catch (e: Exception) {
+                    resultStatus = CommandStatus.FAILED
+                    failureReason = e.message
+                }
+            }
+
+            CommandAction.UNLOCK_APP -> {
+                try {
+                    val payload = command.payloadJson?.let { JSONObject(it.toString()) }
+                    val pkg = payload?.optString("package_name") ?: "all"
+                    if (pkg.equals("all", ignoreCase = true) || pkg.isBlank()) {
+                        appLockManager.unlockAll()
+                    } else {
+                        appLockManager.unlockPackage(pkg)
+                    }
+                    resultStatus = CommandStatus.SUCCEEDED
+                    android.util.Log.d("CommandExecutor", "Executed UNLOCK_APP for $pkg")
+                } catch (e: Exception) {
+                    resultStatus = CommandStatus.FAILED
+                    failureReason = e.message
+                }
+            }
+
+            CommandAction.SYNC_ACTIVITY -> {
+                try {
+                    activityRepository.collectAndQueueEvents()
+                    activityRepository.syncPendingEventsToServer()
+                    resultStatus = CommandStatus.SUCCEEDED
+                    android.util.Log.d("CommandExecutor", "Executed SYNC_ACTIVITY successfully")
+                } catch (e: Exception) {
+                    resultStatus = CommandStatus.FAILED
+                    failureReason = e.message
+                }
+            }
+
+            CommandAction.STOP_LOCATION -> {
+                try {
+                    LocationTrackingService.stop(context)
+                    resultStatus = CommandStatus.SUCCEEDED
+                    android.util.Log.d("CommandExecutor", "Executed STOP_LOCATION successfully")
+                } catch (e: Exception) {
+                    resultStatus = CommandStatus.FAILED
+                    failureReason = e.message
+                }
+            }
         }
 
         // Send final ACK to server
-        apiClient.ackCommand(
+        val finalAck = apiClient.ackCommand(
             DeviceCommandAckRequest(
                 commandId = command.id,
                 deviceId = deviceId,
@@ -89,6 +160,7 @@ class CommandExecutor(
                 failureReason = failureReason
             )
         )
+        android.util.Log.d("CommandExecutor", "Final ACK result for ${command.id}: $finalAck, resultStatus=$resultStatus")
 
         return resultStatus
     }

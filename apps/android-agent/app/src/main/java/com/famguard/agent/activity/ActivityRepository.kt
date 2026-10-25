@@ -55,7 +55,9 @@ class ActivityRepository(
             ?: return@withContext Result.failure(IllegalStateException("No enrolled device secret"))
 
         val unsynced = dao.getUnsyncedEvents(limit = 100)
-        if (unsynced.isEmpty()) {
+        val installedApps = com.famguard.agent.security.InstalledAppsProvider.getLaunchableApps(context)
+
+        if (unsynced.isEmpty() && installedApps.isEmpty()) {
             return@withContext Result.success(0)
         }
 
@@ -76,7 +78,8 @@ class ActivityRepository(
             IngestActivityRequest(
                 deviceId = deviceId,
                 deviceSecret = deviceSecret,
-                events = dtoList
+                events = dtoList,
+                installedApps = if (installedApps.isNotEmpty()) installedApps else null
             )
         )
 

@@ -181,33 +181,40 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Policies for families
+DROP POLICY IF EXISTS "Users can view their families" ON public.families;
 CREATE POLICY "Users can view their families"
     ON public.families FOR SELECT
     USING (public.is_family_member(id));
 
+DROP POLICY IF EXISTS "Guardians can update their family" ON public.families;
 CREATE POLICY "Guardians can update their family"
     ON public.families FOR UPDATE
     USING (public.is_family_guardian(id));
 
 -- Policies for family_members
+DROP POLICY IF EXISTS "Users can view members of their families" ON public.family_members;
 CREATE POLICY "Users can view members of their families"
     ON public.family_members FOR SELECT
     USING (public.is_family_member(family_id));
 
+DROP POLICY IF EXISTS "Guardians can manage family members" ON public.family_members;
 CREATE POLICY "Guardians can manage family members"
     ON public.family_members FOR ALL
     USING (public.is_family_guardian(family_id));
 
 -- Policies for devices
+DROP POLICY IF EXISTS "Family members can view family devices" ON public.devices;
 CREATE POLICY "Family members can view family devices"
     ON public.devices FOR SELECT
     USING (public.is_family_member(family_id));
 
+DROP POLICY IF EXISTS "Guardians can update device details" ON public.devices;
 CREATE POLICY "Guardians can update device details"
     ON public.devices FOR UPDATE
     USING (public.is_family_guardian(family_id));
 
 -- Policies for device_consents
+DROP POLICY IF EXISTS "Family members can view device consents" ON public.device_consents;
 CREATE POLICY "Family members can view device consents"
     ON public.device_consents FOR SELECT
     USING (
@@ -218,11 +225,13 @@ CREATE POLICY "Family members can view device consents"
     );
 
 -- Policies for pairing_tokens
+DROP POLICY IF EXISTS "Guardians can create and view pairing tokens" ON public.pairing_tokens;
 CREATE POLICY "Guardians can create and view pairing tokens"
     ON public.pairing_tokens FOR ALL
     USING (public.is_family_guardian(family_id));
 
 -- Policies for location_sessions
+DROP POLICY IF EXISTS "Guardians can view and create location sessions" ON public.location_sessions;
 CREATE POLICY "Guardians can view and create location sessions"
     ON public.location_sessions FOR ALL
     USING (
@@ -233,6 +242,7 @@ CREATE POLICY "Guardians can view and create location sessions"
     );
 
 -- Policies for location_updates
+DROP POLICY IF EXISTS "Family members can view location updates" ON public.location_updates;
 CREATE POLICY "Family members can view location updates"
     ON public.location_updates FOR SELECT
     USING (
@@ -246,6 +256,7 @@ CREATE POLICY "Family members can view location updates"
     );
 
 -- Policies for device_app_events
+DROP POLICY IF EXISTS "Guardians can view permitted app events" ON public.device_app_events;
 CREATE POLICY "Guardians can view permitted app events"
     ON public.device_app_events FOR SELECT
     USING (
@@ -259,6 +270,7 @@ CREATE POLICY "Guardians can view permitted app events"
     );
 
 -- Policies for device_commands
+DROP POLICY IF EXISTS "Guardians can create and view commands" ON public.device_commands;
 CREATE POLICY "Guardians can create and view commands"
     ON public.device_commands FOR SELECT
     USING (
@@ -268,6 +280,7 @@ CREATE POLICY "Guardians can create and view commands"
         )
     );
 
+DROP POLICY IF EXISTS "Guardians can insert commands" ON public.device_commands;
 CREATE POLICY "Guardians can insert commands"
     ON public.device_commands FOR INSERT
     WITH CHECK (
@@ -281,6 +294,7 @@ CREATE POLICY "Guardians can insert commands"
     );
 
 -- Policies for audit_events
+DROP POLICY IF EXISTS "Guardians can view family audit events" ON public.audit_events;
 CREATE POLICY "Guardians can view family audit events"
     ON public.audit_events FOR SELECT
     USING (public.is_family_guardian(family_id));

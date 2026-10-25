@@ -1,8 +1,7 @@
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { authenticateGuardian, getServiceClient } from '../_shared/authHelper.ts';
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -72,15 +71,27 @@ serve(async (req: Request) => {
       .maybeSingle();
 
     if (existingSession) {
+      // Re-dispatch refresh_location command so target device streams immediately
+      await admin.from('device_commands').insert({
+        device_id,
+        requested_by: user.id,
+        action: 'refresh_location',
+        payload_json: { session_id: existingSession.id, expires_at: existingSession.expires_at },
+        status: 'pending',
+        expires_at: existingSession.expires_at
+      });
+
       return new Response(JSON.stringify(existingSession), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
-    // Cap duration between 1 and 30 minutes (default 5)
-    const validMinutes = Math.min(Math.max(Number(duration_minutes) || 5, 1), 30);
-    const expiresAt = new Date(Date.now() + validMinutes * 60 * 1000).toISOString();
+    // WhatsApp-style live location: always active until explicitly closed
+    const validMinutes = Number(duration_minutes);
+    const expiresAt = (validMinutes && validMinutes > 0)
+      ? new Date(Date.now() + validMinutes * 60 * 1000).toISOString()
+      : new Date(Date.now() + 1000 * 86400 * 365 * 10).toISOString(); // 10 years indefinite
 
     const { data: newSession, error: sessErr } = await admin
       .from('location_sessions')

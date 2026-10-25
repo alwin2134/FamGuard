@@ -6,6 +6,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,8 +23,8 @@ data class AuthUser(
 )
 
 class ControllerApiClient(
-    private val supabaseUrl: String = "https://your-project.supabase.co",
-    private val anonKey: String = ""
+    private val supabaseUrl: String = "https://hbhahtluthtsswqavexa.supabase.co",
+    private val anonKey: String = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhiaGFodGx1dGh0c3N3cWF2ZXhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NDM4MTcsImV4cCI6MjEwODQxOTgxN30.ZaCR1YjhI3lIcK7z0HAl4tRaiF3UrXnFP0USim7oakM"
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -101,11 +104,99 @@ class ControllerApiClient(
         }
     }
 
-    suspend fun dispatchCommand(deviceId: String, action: CommandAction, payload: Map<String, String> = emptyMap()): Result<DeviceCommand> =
-        postWithAuth(
-            "$supabaseUrl/functions/v1/device-command",
-            json.encodeToString(mapOf("device_id" to deviceId, "action" to action.name.lowercase(), "payload" to json.encodeToString(payload)))
-        )
+    suspend fun fetchFamilyDevices(familyId: String = "11111111-1111-1111-1111-111111111111"): Result<List<Device>> = withContext(Dispatchers.IO) {
+        val token = currentUser?.accessToken ?: anonKey
+        val req = Request.Builder()
+            .url("$supabaseUrl/rest/v1/devices?family_id=eq.$familyId&status=eq.active&order=enrolled_at.desc&select=*")
+            .get()
+            .addHeader("apikey", anonKey)
+            .addHeader("Authorization", "Bearer $token")
+            .build()
+        try {
+            client.newCall(req).execute().use { res ->
+                val body = res.body?.string() ?: "[]"
+                if (res.isSuccessful) {
+                    Result.success(json.decodeFromString<List<Device>>(body))
+                } else {
+                    Result.failure(IOException("Failed to fetch devices (${res.code}): $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchLatestLocation(deviceId: String): Result<LocationUpdate?> = withContext(Dispatchers.IO) {
+        val token = currentUser?.accessToken ?: anonKey
+        val req = Request.Builder()
+            .url("$supabaseUrl/rest/v1/location_updates?device_id=eq.$deviceId&order=recorded_at.desc&limit=1")
+            .get()
+            .addHeader("apikey", anonKey)
+            .addHeader("Authorization", "Bearer $token")
+            .build()
+        try {
+            client.newCall(req).execute().use { res ->
+                val body = res.body?.string() ?: "[]"
+                if (res.isSuccessful) {
+                    val list = json.decodeFromString<List<LocationUpdate>>(body)
+                    Result.success(list.firstOrNull())
+                } else {
+                    Result.failure(IOException("Failed to fetch location: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchCommands(deviceId: String): Result<List<DeviceCommand>> = withContext(Dispatchers.IO) {
+        val token = currentUser?.accessToken ?: anonKey
+        val req = Request.Builder()
+            .url("$supabaseUrl/rest/v1/device_commands?device_id=eq.$deviceId&order=created_at.desc&limit=20")
+            .get()
+            .addHeader("apikey", anonKey)
+            .addHeader("Authorization", "Bearer $token")
+            .build()
+        try {
+            client.newCall(req).execute().use { res ->
+                val body = res.body?.string() ?: "[]"
+                if (res.isSuccessful) {
+                    Result.success(json.decodeFromString<List<DeviceCommand>>(body))
+                } else {
+                    Result.failure(IOException("Failed to fetch commands: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun dispatchCommand(
+        deviceId: String,
+        action: CommandAction,
+        payloadMap: Map<String, String> = emptyMap()
+    ): Result<DeviceCommand> {
+        val actionStr = when (action) {
+            CommandAction.RING -> "ring"
+            CommandAction.REFRESH_LOCATION -> "refresh_location"
+            CommandAction.LOCK_APP -> "lock_app"
+            CommandAction.UNLOCK_APP -> "unlock_app"
+            CommandAction.SYNC_ACTIVITY -> "sync_activity"
+            CommandAction.STOP_LOCATION -> "stop_location"
+        }
+        val jsonObject = buildJsonObject {
+            put("device_id", deviceId)
+            put("action", actionStr)
+            if (payloadMap.isNotEmpty()) {
+                putJsonObject("payload") {
+                    for ((k, v) in payloadMap) {
+                        put(k, v)
+                    }
+                }
+            }
+        }
+        return postWithAuth("$supabaseUrl/functions/v1/device-command", jsonObject.toString())
+    }
 
     private suspend inline fun <reified T> postWithAuth(url: String, jsonBody: String): Result<T> = withContext(Dispatchers.IO) {
         val token = currentUser?.accessToken ?: return@withContext Result.failure(IllegalStateException("Not authenticated"))

@@ -1,31 +1,42 @@
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { authenticateDevice } from '../_shared/authHelper.ts';
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
-    const { device_id, device_secret, events } = await req.json();
+    const { device_id, device_secret, events, installed_apps } = await req.json();
 
-    if (!device_id || !device_secret || !Array.isArray(events)) {
-      return new Response(JSON.stringify({ error: 'Missing device_id, device_secret, or events array' }), {
+    if (!device_id || !device_secret) {
+      return new Response(JSON.stringify({ error: 'Missing device_id or device_secret' }), {
         status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    }
-
-    if (events.length === 0) {
-      return new Response(JSON.stringify({ ingested: 0, skipped_duplicates: 0 }), {
-        status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
     // Authenticate device
     const { device, adminClient } = await authenticateDevice(device_id, device_secret);
+
+    // If installed_apps provided, persist to devices table
+    if (Array.isArray(installed_apps)) {
+      await adminClient
+        .from('devices')
+        .update({
+          installed_apps,
+          last_seen_at: new Date().toISOString(),
+          is_online: true
+        })
+        .eq('id', device_id);
+    }
+
+    if (!Array.isArray(events) || events.length === 0) {
+      return new Response(JSON.stringify({ ingested: 0, skipped_duplicates: 0, apps_synced: Array.isArray(installed_apps) ? installed_apps.length : 0 }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
 
     // Verify app-activity consent
     const { data: consent } = await adminClient

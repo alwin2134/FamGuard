@@ -13,8 +13,8 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class AgentApiClient(
-    private val baseUrl: String = "https://your-project.supabase.co/functions/v1",
-    private val anonKey: String = ""
+    private val baseUrl: String = "https://hbhahtluthtsswqavexa.supabase.co/functions/v1",
+    private val anonKey: String = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhiaGFodGx1dGh0c3N3cWF2ZXhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NDM4MTcsImV4cCI6MjEwODQxOTgxN30.ZaCR1YjhI3lIcK7z0HAl4tRaiF3UrXnFP0USim7oakM"
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -40,6 +40,14 @@ class AgentApiClient(
 
     suspend fun ackCommand(request: DeviceCommandAckRequest): Result<DeviceCommand> =
         post("$baseUrl/device-ack", json.encodeToString(request))
+
+    suspend fun fetchPendingCommands(deviceId: String, deviceSecret: String): Result<List<DeviceCommand>> {
+        val payload = mapOf(
+            "device_id" to deviceId,
+            "device_secret" to deviceSecret
+        )
+        return post("$baseUrl/get-pending-commands", json.encodeToString(payload))
+    }
 
     suspend fun stopLocationSession(
         sessionId: String,
@@ -72,6 +80,7 @@ class AgentApiClient(
                     .url("$baseUrl/revoke-device")
                     .post(json.encodeToString(payload).toRequestBody(jsonMediaType))
                     .addHeader("apikey", anonKey)
+                    .addHeader("Authorization", "Bearer $anonKey")
                     .build()
                 client.newCall(req).execute().use { response ->
                     if (response.isSuccessful) Result.success(true)
@@ -92,6 +101,7 @@ class AgentApiClient(
 
                 if (anonKey.isNotBlank()) {
                     requestBuilder.addHeader("apikey", anonKey)
+                    requestBuilder.addHeader("Authorization", "Bearer $anonKey")
                 }
 
                 client.newCall(requestBuilder.build()).execute().use { response ->

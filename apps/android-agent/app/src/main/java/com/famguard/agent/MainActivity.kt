@@ -24,6 +24,10 @@ class MainActivity : ComponentActivity() {
         usageAccessManager = UsageAccessManager(this)
         apiClient = AgentApiClient()
 
+        if (keystoreManager.isPaired()) {
+            com.famguard.agent.service.FamGuardProtectionService.startService(this)
+        }
+
         setContent {
             MaterialTheme {
                 Surface(
@@ -37,6 +41,13 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::keystoreManager.isInitialized && keystoreManager.isPaired()) {
+            com.famguard.agent.service.FamGuardProtectionService.startService(this)
         }
     }
 }

@@ -1,8 +1,7 @@
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { authenticateDevice } from '../_shared/authHelper.ts';
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -72,9 +71,10 @@ serve(async (req: Request) => {
       });
     }
 
-    // Check expiry
+    // Check expiry (ignore for indefinite WhatsApp-style sessions)
     const nowMs = Date.now();
-    if (new Date(session.expires_at).getTime() <= nowMs) {
+    const expiryYear = new Date(session.expires_at).getFullYear();
+    if (expiryYear < 2090 && new Date(session.expires_at).getTime() <= nowMs) {
       await adminClient
         .from('location_sessions')
         .update({ status: 'expired' })

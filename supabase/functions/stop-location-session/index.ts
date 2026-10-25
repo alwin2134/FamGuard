@@ -1,8 +1,7 @@
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { authenticateGuardian, authenticateDevice, getServiceClient } from '../_shared/authHelper.ts';
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -61,6 +60,16 @@ serve(async (req: Request) => {
       .single();
 
     if (updateErr) throw updateErr;
+
+    // Dispatch stop_location command to the target device
+    await admin.from('device_commands').insert({
+      device_id: session.device_id,
+      requested_by: actorId,
+      action: 'stop_location',
+      payload_json: { session_id },
+      status: 'pending',
+      expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+    });
 
     // Record audit event
     await admin.from('audit_events').insert({

@@ -1,8 +1,7 @@
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { authenticateGuardian, getServiceClient } from '../_shared/authHelper.ts';
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -25,7 +24,7 @@ serve(async (req: Request) => {
     // Verify guardian authorization
     const { data: device, error: devErr } = await admin
       .from('devices')
-      .select('id, family_id, name, last_seen_at, is_online, device_consents(app_activity_enabled)')
+      .select('id, family_id, name, last_seen_at, is_online, installed_apps, locked_apps, device_consents(app_activity_enabled)')
       .eq('id', deviceId)
       .single();
 
@@ -117,7 +116,9 @@ serve(async (req: Request) => {
         occurred_at: latestEvent.occurred_at
       } : null,
       timeline: events || [],
-      daily_summaries: summaries
+      daily_summaries: summaries,
+      installed_apps: device.installed_apps || [],
+      locked_apps: device.locked_apps || []
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }

@@ -2,6 +2,7 @@ package com.famguard.contracts
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 @Serializable
 enum class MemberRole {
@@ -58,7 +59,15 @@ enum class CommandAction {
     @SerialName("refresh_location")
     REFRESH_LOCATION,
     @SerialName("ring")
-    RING
+    RING,
+    @SerialName("lock_app")
+    LOCK_APP,
+    @SerialName("unlock_app")
+    UNLOCK_APP,
+    @SerialName("sync_activity")
+    SYNC_ACTIVITY,
+    @SerialName("stop_location")
+    STOP_LOCATION
 }
 
 @Serializable
@@ -166,7 +175,7 @@ data class DeviceCommand(
     @SerialName("device_id") val deviceId: String,
     @SerialName("requested_by") val requestedBy: String,
     val action: CommandAction,
-    @SerialName("payload_json") val payloadJson: String? = null,
+    @SerialName("payload_json") val payloadJson: JsonElement? = null,
     val status: CommandStatus,
     @SerialName("created_at") val createdAt: String,
     @SerialName("expires_at") val expiresAt: String,
@@ -224,10 +233,18 @@ data class CompletePairingResponse(
 
 // Ingest App Activity DTO
 @Serializable
+data class InstalledAppDto(
+    @SerialName("package_name") val packageName: String,
+    @SerialName("app_label") val appLabel: String,
+    @SerialName("is_system") val isSystem: Boolean = false
+)
+
+@Serializable
 data class IngestActivityRequest(
     @SerialName("device_id") val deviceId: String,
     @SerialName("device_secret") val deviceSecret: String,
-    val events: List<DeviceAppEvent>
+    val events: List<DeviceAppEvent>,
+    @SerialName("installed_apps") val installedApps: List<InstalledAppDto>? = null
 )
 
 @Serializable
