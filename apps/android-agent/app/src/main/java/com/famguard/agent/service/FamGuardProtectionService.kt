@@ -40,7 +40,7 @@ class FamGuardProtectionService : Service() {
     override fun onCreate() {
         super.onCreate()
         keystoreManager = DeviceKeystoreManager(this)
-        apiClient = AgentApiClient()
+        apiClient = AgentApiClient(this)
         appLockManager = AppLockManager(this)
         appLockOverlayManager = AppLockOverlayManager(this, appLockManager)
         commandExecutor = CommandExecutor(this, apiClient, keystoreManager, appLockManager)
@@ -112,8 +112,10 @@ class FamGuardProtectionService : Service() {
         serviceScope.launch {
             while (isActive) {
                 try {
-                    if (keystoreManager.isPaired() && usageAccessManager.hasUsageAccess()) {
-                        activityRepository.collectAndQueueEvents()
+                    if (keystoreManager.isPaired()) {
+                        if (usageAccessManager.hasUsageAccess()) {
+                            activityRepository.collectAndQueueEvents()
+                        }
                         activityRepository.syncPendingEventsToServer()
                     }
                 } catch (e: Exception) {

@@ -125,7 +125,12 @@ class DeviceKeystoreManager(context: Context) {
     fun getLastSyncTimestamp(): Long = prefs.getLong(KEY_LAST_SYNC_TIMESTAMP, 0L)
 
     fun clearCredentials() {
+        val serverUrl = prefs.getString(KEY_SERVER_URL, null)
+        val anonKey = prefs.getString(KEY_ANON_KEY, null)
         prefs.edit().clear().apply()
+        if (!serverUrl.isNullOrBlank() || !anonKey.isNullOrBlank()) {
+            saveServerConfig(serverUrl ?: "", anonKey ?: "")
+        }
     }
 
     companion object {

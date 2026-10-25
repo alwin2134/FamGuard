@@ -46,7 +46,7 @@ class LocationTrackingService : Service() {
     override fun onCreate() {
         super.onCreate()
         keystoreManager = DeviceKeystoreManager(this)
-        apiClient = AgentApiClient()
+        apiClient = AgentApiClient(this)
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         systemLocationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
 

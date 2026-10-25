@@ -131,6 +131,46 @@ fun ControllerMainScreen(
         }
     }
 
+    // Auto-fetch data whenever selected device or tab changes
+    LaunchedEffect(selectedDevice?.id, currentTab) {
+        val devId = selectedDevice?.id ?: return@LaunchedEffect
+        when (currentTab) {
+            ControllerScreenTab.MAP -> {
+                val res = apiClient.fetchLatestLocation(devId)
+                res.onSuccess { loc -> latestLocation = loc }
+            }
+            ControllerScreenTab.APP_DRAWER, ControllerScreenTab.ACTIVITY -> {
+                isActivityLoading = true
+                val res = apiClient.getAppActivity(devId)
+                res.fold(
+                    onSuccess = { activityJsonString = it },
+                    onFailure = { activityJsonString = null }
+                )
+                isActivityLoading = false
+            }
+            ControllerScreenTab.COMMANDS -> {
+                val res = apiClient.fetchCommands(devId)
+                res.onSuccess { cmds ->
+                    commandsList.clear()
+                    commandsList.addAll(cmds)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    // Real-time map location polling loop while on Map tab
+    LaunchedEffect(selectedDevice?.id, currentTab, activeLocationSession) {
+        val devId = selectedDevice?.id ?: return@LaunchedEffect
+        if (currentTab == ControllerScreenTab.MAP) {
+            while (isActive) {
+                val res = apiClient.fetchLatestLocation(devId)
+                res.onSuccess { loc -> if (loc != null) latestLocation = loc }
+                delay(3000)
+            }
+        }
+    }
+
     // App-launch Auto-Update Check
     var appLaunchUpdateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isAppLaunchDownloading by remember { mutableStateOf(false) }

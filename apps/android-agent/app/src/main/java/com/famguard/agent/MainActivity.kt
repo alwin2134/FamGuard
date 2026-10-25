@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
         keystoreManager = DeviceKeystoreManager(this)
         usageAccessManager = UsageAccessManager(this)
         apiClient = AgentApiClient(
+            context = this,
             baseUrl = "${keystoreManager.getServerUrl().trimEnd('/')}/functions/v1",
             anonKey = keystoreManager.getAnonKey()
         )

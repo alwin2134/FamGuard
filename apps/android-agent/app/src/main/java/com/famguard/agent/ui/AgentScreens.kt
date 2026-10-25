@@ -188,6 +188,7 @@ fun AgentMainScreen(
         activeSessionId = keystoreManager.getActiveSessionId()
         if (isPaired) {
             com.famguard.agent.service.FamGuardProtectionService.startService(context)
+            com.famguard.agent.activity.ActivitySyncWorker.triggerImmediateSync(context)
             while (isActive && isPaired) {
                 val devId = keystoreManager.getDeviceId()
                 val devSecret = keystoreManager.getDeviceSecret()
@@ -637,6 +638,8 @@ fun AgentMainScreen(
                                         apiClient.revokeDevice(devId, devSec, "Target unlinked")
                                     }
                                     keystoreManager.clearCredentials()
+                                    com.famguard.agent.service.FamGuardProtectionService.stopService(context)
+                                    com.famguard.agent.location.LocationTrackingService.stop(context)
                                     isPaired = false
                                     familyName = ""
                                     deviceId = ""
@@ -794,9 +797,15 @@ fun AgentMainScreen(
                                         deviceId = paired.deviceId
                                         showPairingDialog = false
 
+                                        // Start foreground protection service immediately
+                                        com.famguard.agent.service.FamGuardProtectionService.startService(context)
+
+                                        // Trigger immediate sync of installed apps and activity
+                                        com.famguard.agent.activity.ActivitySyncWorker.triggerImmediateSync(context)
+
                                         // Start periodic work if activity is consented
                                         if (consentActivity) {
-                                            ActivitySyncWorker.schedulePeriodicSync(context)
+                                            com.famguard.agent.activity.ActivitySyncWorker.schedulePeriodicSync(context)
                                         }
                                     },
                                     onFailure = { err ->

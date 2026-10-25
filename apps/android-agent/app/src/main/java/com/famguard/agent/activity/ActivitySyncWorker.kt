@@ -18,20 +18,17 @@ class ActivitySyncWorker(
         }
 
         val usageManager = UsageAccessManager(applicationContext)
-        if (!usageManager.hasUsageAccess()) {
-            // Cannot collect without permission - stop work gracefully
-            return Result.success()
-        }
-
         val database = AgentDatabase.getInstance(applicationContext)
-        val apiClient = AgentApiClient()
+        val apiClient = AgentApiClient(applicationContext)
         val repository = ActivityRepository(applicationContext, database, keystoreManager, apiClient)
 
         return try {
-            // 1. Collect new usage events and save to Room
-            repository.collectAndQueueEvents()
+            // 1. Collect new usage events if permission is granted
+            if (usageManager.hasUsageAccess()) {
+                repository.collectAndQueueEvents()
+            }
 
-            // 2. Sync pending events to Supabase
+            // 2. Sync pending events and installed apps to Supabase
             val syncResult = repository.syncPendingEventsToServer()
 
             if (syncResult.isSuccess) {

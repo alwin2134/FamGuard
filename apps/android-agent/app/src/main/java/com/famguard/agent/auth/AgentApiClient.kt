@@ -7,22 +7,48 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import android.content.Context
+import com.famguard.agent.security.DeviceKeystoreManager
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class AgentApiClient(
+    private val context: Context? = null,
     private var baseUrl: String = "",
     private var anonKey: String = ""
 ) {
+
+    private fun ensureCredentials() {
+        if ((baseUrl.isBlank() || anonKey.isBlank()) && context != null) {
+            val km = DeviceKeystoreManager(context)
+            val server = km.getServerUrl().trimEnd('/')
+            if (server.isNotBlank()) {
+                baseUrl = "$server/functions/v1"
+            }
+            val key = km.getAnonKey()
+            if (key.isNotBlank()) {
+                anonKey = key
+            }
+        }
+    }
+
     fun updateCredentials(serverUrl: String, key: String) {
         if (serverUrl.isNotBlank()) this.baseUrl = "${serverUrl.trimEnd('/')}/functions/v1"
         if (key.isNotBlank()) this.anonKey = key.trim()
     }
 
-    fun getBaseUrl(): String = baseUrl
-    fun getAnonKey(): String = anonKey
+    fun getBaseUrl(): String {
+        ensureCredentials()
+        return baseUrl
+    }
+
+    fun getAnonKey(): String {
+        ensureCredentials()
+        return anonKey
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -37,23 +63,23 @@ class AgentApiClient(
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     suspend fun completePairing(request: CompletePairingRequest): Result<CompletePairingResponse> =
-        post("$baseUrl/complete-pairing", json.encodeToString(request))
+        post("complete-pairing", json.encodeToString(request))
 
     suspend fun uploadLocation(request: UploadLocationRequest): Result<UploadLocationResponse> =
-        post("$baseUrl/update-location", json.encodeToString(request))
+        post("update-location", json.encodeToString(request))
 
     suspend fun ingestActivity(request: IngestActivityRequest): Result<IngestActivityResponse> =
-        post("$baseUrl/ingest-app-activity", json.encodeToString(request))
+        post("ingest-app-activity", json.encodeToString(request))
 
     suspend fun ackCommand(request: DeviceCommandAckRequest): Result<DeviceCommand> =
-        post("$baseUrl/device-ack", json.encodeToString(request))
+        post("device-ack", json.encodeToString(request))
 
     suspend fun fetchPendingCommands(deviceId: String, deviceSecret: String): Result<List<DeviceCommand>> {
         val payload = mapOf(
             "device_id" to deviceId,
             "device_secret" to deviceSecret
         )
-        return post("$baseUrl/get-pending-commands", json.encodeToString(payload))
+        return post("get-pending-commands", json.encodeToString(payload))
     }
 
     suspend fun stopLocationSession(
@@ -68,7 +94,7 @@ class AgentApiClient(
             "device_secret" to deviceSecret,
             "reason" to (reason ?: "Stopped by user")
         )
-        return post("$baseUrl/stop-location-session", json.encodeToString(payload))
+        return post("stop-location-session", json.encodeToString(payload))
     }
 
     suspend fun revokeDevice(
@@ -83,8 +109,10 @@ class AgentApiClient(
         )
         return withContext(Dispatchers.IO) {
             try {
+                ensureCredentials()
+                val targetUrl = "${baseUrl.trimEnd('/')}/revoke-device"
                 val req = Request.Builder()
-                    .url("$baseUrl/revoke-device")
+                    .url(targetUrl)
                     .post(json.encodeToString(payload).toRequestBody(jsonMediaType))
                     .addHeader("apikey", anonKey)
                     .addHeader("Authorization", "Bearer $anonKey")
@@ -99,11 +127,17 @@ class AgentApiClient(
         }
     }
 
-    private suspend inline fun <reified T> post(url: String, jsonBody: String): Result<T> =
+    private suspend inline fun <reified T> post(pathOrUrl: String, jsonBody: String): Result<T> =
         withContext(Dispatchers.IO) {
             try {
+                ensureCredentials()
+                val targetUrl = if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+                    pathOrUrl
+                } else {
+                    "${baseUrl.trimEnd('/')}/${pathOrUrl.trimStart('/')}"
+                }
                 val requestBuilder = Request.Builder()
-                    .url(url)
+                    .url(targetUrl)
                     .post(jsonBody.toRequestBody(jsonMediaType))
 
                 if (anonKey.isNotBlank()) {
