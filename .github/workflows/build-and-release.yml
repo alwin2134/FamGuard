@@ -74,17 +74,12 @@ jobs:
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "should_release=true" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.create_release }}" = "true" ]; then
-            if [ -n "${{ github.event.inputs.tag_name }}" ]; then
-              echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
-            else
-              echo "tag=v1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
-            fi
-            echo "should_release=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
           else
-            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "tag=v1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
           fi
+          echo "should_release=true" >> $GITHUB_OUTPUT
 
       - name: Publish GitHub Release
         if: steps.release_tag.outputs.should_release == 'true'
@@ -95,6 +90,7 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+          make_latest: true
           files: |
             release-artifacts/famguard-controller.apk
             release-artifacts/famguard-agent.apk
