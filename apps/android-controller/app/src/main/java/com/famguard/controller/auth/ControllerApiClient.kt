@@ -23,9 +23,16 @@ data class AuthUser(
 )
 
 class ControllerApiClient(
-    private val supabaseUrl: String = "https://hbhahtluthtsswqavexa.supabase.co",
-    private val anonKey: String = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhiaGFodGx1dGh0c3N3cWF2ZXhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NDM4MTcsImV4cCI6MjEwODQxOTgxN30.ZaCR1YjhI3lIcK7z0HAl4tRaiF3UrXnFP0USim7oakM"
+    private var supabaseUrl: String = "",
+    private var anonKey: String = ""
 ) {
+    fun updateCredentials(url: String, key: String) {
+        if (url.isNotBlank()) this.supabaseUrl = url.trimEnd('/')
+        if (key.isNotBlank()) this.anonKey = key.trim()
+    }
+
+    fun getSupabaseUrl(): String = supabaseUrl
+    fun getAnonKey(): String = anonKey
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true

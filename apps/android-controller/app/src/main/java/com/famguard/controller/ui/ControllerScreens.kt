@@ -40,7 +40,14 @@ import android.webkit.WebViewClient
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import android.widget.Toast
 import org.json.JSONObject
+import com.famguard.controller.config.ControllerConfigStore
+import com.famguard.controller.update.UpdateManager
+import com.famguard.controller.update.UpdateInfo
+import com.famguard.controller.BuildConfig
 
 enum class ControllerScreenTab {
     DASHBOARD,
@@ -52,9 +59,17 @@ enum class ControllerScreenTab {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ControllerMainScreen(apiClient: ControllerApiClient) {
+fun ControllerMainScreen(
+    apiClient: ControllerApiClient,
+    configStore: ControllerConfigStore? = null
+) {
+    val context = LocalContext.current
+    val currentConfigStore = configStore ?: remember { ControllerConfigStore(context) }
     val coroutineScope = rememberCoroutineScope()
     var isAuthenticated by remember { mutableStateOf(apiClient.currentUser != null) }
+
+    // Settings dialog state
+    var showSettingsDialog by remember { mutableStateOf(false) }
 
     // Auth state
     var emailInput by remember { mutableStateOf("guardian@famguard.org") }
@@ -114,12 +129,25 @@ fun ControllerMainScreen(apiClient: ControllerApiClient) {
         }
     }
 
+    if (showSettingsDialog) {
+        ControllerSettingsDialog(
+            configStore = currentConfigStore,
+            apiClient = apiClient,
+            onDismiss = { showSettingsDialog = false }
+        )
+    }
+
     if (!isAuthenticated) {
         // Sign-in Screen
         Scaffold(
             topBar = {
                 TopAppBar(
                     title = { Text("FamGuard Guardian Portal", fontWeight = FontWeight.Bold) },
+                    actions = {
+                        IconButton(onClick = { showSettingsDialog = true }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings & Updates")
+                        }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                 )
             }
@@ -208,6 +236,17 @@ fun ControllerMainScreen(apiClient: ControllerApiClient) {
                                 Text("Sign In to Family")
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        OutlinedButton(
+                            onClick = { showSettingsDialog = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Configure Server & Updates")
+                        }
                     }
                 }
             }
@@ -233,6 +272,9 @@ fun ControllerMainScreen(apiClient: ControllerApiClient) {
                         }
                         IconButton(onClick = { showAddDeviceDialog = true }) {
                             Icon(Icons.Default.QrCode, contentDescription = "Add Device")
+                        }
+                        IconButton(onClick = { showSettingsDialog = true }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings & Updates")
                         }
                         IconButton(onClick = {
                             apiClient.currentUser = null
@@ -1670,4 +1712,277 @@ fun DeviceCommandsScreen(
             }
         }
     }
+}
+
+@Composable
+fun ControllerSettingsDialog(
+    configStore: ControllerConfigStore,
+    apiClient: ControllerApiClient,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var serverUrlInput by remember { mutableStateOf(configStore.getServerUrl()) }
+    var anonKeyInput by remember { mutableStateOf(configStore.getAnonKey()) }
+    var isKeyVisible by remember { mutableStateOf(false) }
+
+    var testStatusMessage by remember { mutableStateOf<String?>(null) }
+    var isTestingConnection by remember { mutableStateOf(false) }
+    var isTestSuccess by remember { mutableStateOf(false) }
+
+    // Update state
+    var isCheckingUpdates by remember { mutableStateOf(false) }
+    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+    var updateStatusMessage by remember { mutableStateOf<String?>(null) }
+    var downloadProgress by remember { mutableStateOf<Float?>(null) }
+    var isDownloading by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Server & Update Settings", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    Text(
+                        "Configure Supabase cloud backend credentials securely. These are stored only in hardware-encrypted storage on this device.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = serverUrlInput,
+                        onValueChange = { serverUrlInput = it },
+                        label = { Text("Supabase / Server URL") },
+                        placeholder = { Text("https://your-project.supabase.co") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = anonKeyInput,
+                        onValueChange = { anonKeyInput = it },
+                        label = { Text("Anon / Public API Key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { isKeyVisible = !isKeyVisible }) {
+                                Icon(
+                                    imageVector = if (isKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (isKeyVisible) "Hide Key" else "Show Key"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+                }
+
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                isTestingConnection = true
+                                testStatusMessage = null
+                                coroutineScope.launch {
+                                    val res = configStore.testConnection(serverUrlInput, anonKeyInput)
+                                    res.fold(
+                                        onSuccess = { msg ->
+                                            testStatusMessage = msg
+                                            isTestSuccess = true
+                                        },
+                                        onFailure = { err ->
+                                            testStatusMessage = err.message ?: "Connection failed"
+                                            isTestSuccess = false
+                                        }
+                                    )
+                                    isTestingConnection = false
+                                }
+                            },
+                            enabled = !isTestingConnection
+                        ) {
+                            if (isTestingConnection) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...")
+                            } else {
+                                Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Connection")
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                configStore.saveConfig(serverUrlInput, anonKeyInput)
+                                apiClient.updateCredentials(serverUrlInput, anonKeyInput)
+                                Toast.makeText(context, "Server configuration saved successfully!", Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            }
+                        ) {
+                            Text("Save & Apply")
+                        }
+                    }
+                }
+
+                if (testStatusMessage != null) {
+                    item {
+                        Surface(
+                            color = if (isTestSuccess) Color(0xFFE8F5E9) else Color(0xFFFFEBEE),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = testStatusMessage!!,
+                                color = if (isTestSuccess) Color(0xFF2E7D32) else Color(0xFFC62828),
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                }
+
+                // In-App Updates Section
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("App Version", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text("Installed: v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+
+                                FilledTonalButton(
+                                    onClick = {
+                                        isCheckingUpdates = true
+                                        updateStatusMessage = null
+                                        coroutineScope.launch {
+                                            val res = UpdateManager.checkForUpdates()
+                                            res.fold(
+                                                onSuccess = { info ->
+                                                    updateInfo = info
+                                                    if (info == null) {
+                                                        updateStatusMessage = "You are on the latest version."
+                                                    } else if (!info.isNewer) {
+                                                        updateStatusMessage = "App is up to date (v${BuildConfig.VERSION_NAME})."
+                                                    }
+                                                },
+                                                onFailure = { err ->
+                                                    updateStatusMessage = "Update check failed: ${err.message}"
+                                                }
+                                            )
+                                            isCheckingUpdates = false
+                                        }
+                                    },
+                                    enabled = !isCheckingUpdates && !isDownloading
+                                ) {
+                                    if (isCheckingUpdates) {
+                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Check Update")
+                                    }
+                                }
+                            }
+
+                            if (updateStatusMessage != null) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(updateStatusMessage!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+
+                            if (updateInfo != null && updateInfo!!.isNewer) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text(
+                                            "Update Available: ${updateInfo!!.tagName}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                        Text(
+                                            updateInfo!!.changelog,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                                            maxLines = 3
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Button(
+                                            onClick = {
+                                                isDownloading = true
+                                                coroutineScope.launch {
+                                                    val res = UpdateManager.downloadAndInstallApk(
+                                                        context = context,
+                                                        downloadUrl = updateInfo!!.downloadUrl,
+                                                        fileName = updateInfo!!.fileName,
+                                                        onProgress = { p -> downloadProgress = p }
+                                                    )
+                                                    isDownloading = false
+                                                    res.onFailure { err ->
+                                                        updateStatusMessage = "Install failed: ${err.message}"
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isDownloading,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            if (isDownloading) {
+                                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Downloading ${(downloadProgress?.times(100))?.toInt() ?: 0}%")
+                                            } else {
+                                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Download & Install")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }

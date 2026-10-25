@@ -12,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +41,12 @@ import com.famguard.agent.ui.qr.QrScannerScreen
 import com.famguard.contracts.CompletePairingRequest
 import com.famguard.contracts.DeviceConsentInput
 import com.famguard.contracts.QrPayload
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import android.widget.Toast
+import com.famguard.agent.update.AgentUpdateManager
+import com.famguard.agent.update.AgentUpdateInfo
+import com.famguard.agent.BuildConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -95,6 +102,7 @@ fun AgentMainScreen(
 
     var showPairingDialog by remember { mutableStateOf(false) }
     var showQrScanner by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
     var pairingPayloadJson by remember { mutableStateOf("") }
     var isPairingLoading by remember { mutableStateOf(false) }
     var pairingErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -203,6 +211,14 @@ fun AgentMainScreen(
         return
     }
 
+    if (showSettingsDialog) {
+        AgentSettingsDialog(
+            keystoreManager = keystoreManager,
+            apiClient = apiClient,
+            onDismiss = { showSettingsDialog = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -226,13 +242,21 @@ fun AgentMainScreen(
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
+                    IconButton(onClick = { showSettingsDialog = true }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "Settings & Updates",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
                 )
             )
         }
-    ) { padding ->
+    )
+ { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -887,4 +911,277 @@ fun OemSetupGuideCard(
             }
         }
     }
+}
+
+@Composable
+fun AgentSettingsDialog(
+    keystoreManager: DeviceKeystoreManager,
+    apiClient: AgentApiClient,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var serverUrlInput by remember { mutableStateOf(keystoreManager.getServerUrl()) }
+    var anonKeyInput by remember { mutableStateOf(keystoreManager.getAnonKey()) }
+    var isKeyVisible by remember { mutableStateOf(false) }
+
+    var testStatusMessage by remember { mutableStateOf<String?>(null) }
+    var isTestingConnection by remember { mutableStateOf(false) }
+    var isTestSuccess by remember { mutableStateOf(false) }
+
+    // Update state
+    var isCheckingUpdates by remember { mutableStateOf(false) }
+    var updateInfo by remember { mutableStateOf<AgentUpdateInfo?>(null) }
+    var updateStatusMessage by remember { mutableStateOf<String?>(null) }
+    var downloadProgress by remember { mutableStateOf<Float?>(null) }
+    var isDownloading by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Agent Server & Updates", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    Text(
+                        "Configure the Supabase cloud backend credentials for this target device. Stored securely in Android Keystore encrypted storage.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = serverUrlInput,
+                        onValueChange = { serverUrlInput = it },
+                        label = { Text("Supabase / Server URL") },
+                        placeholder = { Text("https://your-project.supabase.co") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = anonKeyInput,
+                        onValueChange = { anonKeyInput = it },
+                        label = { Text("Anon / Public API Key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { isKeyVisible = !isKeyVisible }) {
+                                Icon(
+                                    imageVector = if (isKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (isKeyVisible) "Hide Key" else "Show Key"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+                }
+
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                isTestingConnection = true
+                                testStatusMessage = null
+                                coroutineScope.launch {
+                                    val res = keystoreManager.testConnection(serverUrlInput, anonKeyInput)
+                                    res.fold(
+                                        onSuccess = { msg ->
+                                            testStatusMessage = msg
+                                            isTestSuccess = true
+                                        },
+                                        onFailure = { err ->
+                                            testStatusMessage = err.message ?: "Connection failed"
+                                            isTestSuccess = false
+                                        }
+                                    )
+                                    isTestingConnection = false
+                                }
+                            },
+                            enabled = !isTestingConnection
+                        ) {
+                            if (isTestingConnection) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...")
+                            } else {
+                                Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Connection")
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                keystoreManager.saveServerConfig(serverUrlInput, anonKeyInput)
+                                apiClient.updateCredentials(serverUrlInput, anonKeyInput)
+                                Toast.makeText(context, "Agent configuration saved successfully!", Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            }
+                        ) {
+                            Text("Save & Apply")
+                        }
+                    }
+                }
+
+                if (testStatusMessage != null) {
+                    item {
+                        Surface(
+                            color = if (isTestSuccess) Color(0xFFE8F5E9) else Color(0xFFFFEBEE),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = testStatusMessage!!,
+                                color = if (isTestSuccess) Color(0xFF2E7D32) else Color(0xFFC62828),
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                }
+
+                // In-App Updates Section
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("Agent App Version", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text("Installed: v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+
+                                FilledTonalButton(
+                                    onClick = {
+                                        isCheckingUpdates = true
+                                        updateStatusMessage = null
+                                        coroutineScope.launch {
+                                            val res = AgentUpdateManager.checkForUpdates()
+                                            res.fold(
+                                                onSuccess = { info ->
+                                                    updateInfo = info
+                                                    if (info == null) {
+                                                        updateStatusMessage = "You are on the latest version."
+                                                    } else if (!info.isNewer) {
+                                                        updateStatusMessage = "Agent is up to date (v${BuildConfig.VERSION_NAME})."
+                                                    }
+                                                },
+                                                onFailure = { err ->
+                                                    updateStatusMessage = "Update check failed: ${err.message}"
+                                                }
+                                            )
+                                            isCheckingUpdates = false
+                                        }
+                                    },
+                                    enabled = !isCheckingUpdates && !isDownloading
+                                ) {
+                                    if (isCheckingUpdates) {
+                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Check Update")
+                                    }
+                                }
+                            }
+
+                            if (updateStatusMessage != null) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(updateStatusMessage!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+
+                            if (updateInfo != null && updateInfo!!.isNewer) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text(
+                                            "Update Available: ${updateInfo!!.tagName}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                        Text(
+                                            updateInfo!!.changelog,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                                            maxLines = 3
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Button(
+                                            onClick = {
+                                                isDownloading = true
+                                                coroutineScope.launch {
+                                                    val res = AgentUpdateManager.downloadAndInstallApk(
+                                                        context = context,
+                                                        downloadUrl = updateInfo!!.downloadUrl,
+                                                        fileName = updateInfo!!.fileName,
+                                                        onProgress = { p -> downloadProgress = p }
+                                                    )
+                                                    isDownloading = false
+                                                    res.onFailure { err ->
+                                                        updateStatusMessage = "Install failed: ${err.message}"
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isDownloading,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            if (isDownloading) {
+                                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Downloading ${(downloadProgress?.times(100))?.toInt() ?: 0}%")
+                                            } else {
+                                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Download & Install")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }

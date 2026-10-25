@@ -1,9 +1,27 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
     id("kotlin-kapt")
 }
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+fun getSecret(key: String, fallback: String = ""): String {
+    return System.getenv(key)
+        ?: localProperties.getProperty(key)
+        ?: fallback
+}
+
+val supabaseUrl = getSecret("SUPABASE_URL", "")
+val supabaseAnonKey = getSecret("SUPABASE_ANON_KEY", "")
 
 android {
     namespace = "com.famguard.agent"
@@ -20,6 +38,9 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        buildConfigField("String", "DEFAULT_SUPABASE_URL", "\"$supabaseUrl\"")
+        buildConfigField("String", "DEFAULT_SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
     }
 
     buildTypes {
@@ -29,6 +50,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("debug")
         }
         debug {
             applicationIdSuffix = ".debug"

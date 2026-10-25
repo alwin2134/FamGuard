@@ -1,8 +1,27 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
 }
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+fun getSecret(key: String, fallback: String = ""): String {
+    return System.getenv(key)
+        ?: localProperties.getProperty(key)
+        ?: fallback
+}
+
+val supabaseUrl = getSecret("SUPABASE_URL", "")
+val supabaseAnonKey = getSecret("SUPABASE_ANON_KEY", "")
+val mapsApiKey = getSecret("MAPS_API_KEY", "AIzaSyFamGuardPlaceholderKeyForDevBuild")
 
 android {
     namespace = "com.famguard.controller"
@@ -19,7 +38,10 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
-        manifestPlaceholders["MAPS_API_KEY"] = "AIzaSyFamGuardPlaceholderKeyForDevBuild"
+
+        buildConfigField("String", "DEFAULT_SUPABASE_URL", "\"$supabaseUrl\"")
+        buildConfigField("String", "DEFAULT_SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
     }
 
     buildTypes {
@@ -29,6 +51,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("debug")
         }
         debug {
             applicationIdSuffix = ".debug"

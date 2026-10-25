@@ -22,7 +22,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         keystoreManager = DeviceKeystoreManager(this)
         usageAccessManager = UsageAccessManager(this)
-        apiClient = AgentApiClient()
+        apiClient = AgentApiClient(
+            baseUrl = "${keystoreManager.getServerUrl().trimEnd('/')}/functions/v1",
+            anonKey = keystoreManager.getAnonKey()
+        )
 
         if (keystoreManager.isPaired()) {
             com.famguard.agent.service.FamGuardProtectionService.startService(this)

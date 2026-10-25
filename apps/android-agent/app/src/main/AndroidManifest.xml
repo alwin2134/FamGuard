@@ -17,6 +17,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    
     <!-- Usage Access permission is granted via Settings -> Special app access -> Usage Access -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
@@ -35,6 +37,17 @@
         android:roundIcon="@android:drawable/sym_def_app_icon"
         android:supportsRtl="true"
         android:theme="@style/Theme.FamGuard">
+
+        <!-- FileProvider for In-App Auto Updates -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <activity
             android:name=".MainActivity"

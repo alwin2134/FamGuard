@@ -1,0 +1,93 @@
+name: Build & Release FamGuard APKs
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publish a GitHub Release with APK assets'
+        required: true
+        type: boolean
+        default: true
+      tag_name:
+        description: 'Release tag name (e.g. v1.0.1 - required if not running on tag push)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release Android APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Make Gradlew Executable
+        run: chmod +x gradlew
+
+      - name: Build Android Release APKs
+        env:
+          # Securely injected from GitHub Actions Repository Secrets
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+        run: |
+          ./gradlew :apps:android-controller:app:assembleRelease :apps:android-agent:app:assembleRelease --stacktrace
+
+      - name: Prepare Release Artifacts
+        run: |
+          mkdir -p release-artifacts
+          cp apps/android-controller/app/build/outputs/apk/release/app-release.apk release-artifacts/famguard-controller.apk
+          cp apps/android-agent/app/build/outputs/apk/release/app-release.apk release-artifacts/famguard-agent.apk
+          cd release-artifacts
+          sha256sum famguard-controller.apk famguard-agent.apk > checksums.txt
+          cat checksums.txt
+
+      - name: Upload Build Artifacts (Actions Run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: famguard-apks
+          path: release-artifacts/
+          retention-days: 14
+
+      - name: Determine Release Tag
+        id: release_tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.inputs.create_release }}" = "true" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish GitHub Release
+        if: steps.release_tag.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: FamGuard Release ${{ steps.release_tag.outputs.tag }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            release-artifacts/famguard-controller.apk
+            release-artifacts/famguard-agent.apk
+            release-artifacts/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

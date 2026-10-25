@@ -11,3 +11,11 @@
 *.aab
 .vscode/
 supabase/.temp/
+*.env
+*.env.*
+.env
+.env.local
+.env.production
+secrets.properties
+*.keystore
+*.jks

@@ -10,13 +10,20 @@ import androidx.compose.ui.Modifier
 import com.famguard.controller.auth.ControllerApiClient
 import com.famguard.controller.ui.ControllerMainScreen
 
+import com.famguard.controller.config.ControllerConfigStore
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var apiClient: ControllerApiClient
+    private lateinit var configStore: ControllerConfigStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        apiClient = ControllerApiClient()
+        configStore = ControllerConfigStore(this)
+        apiClient = ControllerApiClient(
+            supabaseUrl = configStore.getServerUrl(),
+            anonKey = configStore.getAnonKey()
+        )
 
         setContent {
             MaterialTheme {
@@ -24,7 +31,10 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ControllerMainScreen(apiClient = apiClient)
+                    ControllerMainScreen(
+                        apiClient = apiClient,
+                        configStore = configStore
+                    )
                 }
             }
         }

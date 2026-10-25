@@ -13,9 +13,16 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class AgentApiClient(
-    private val baseUrl: String = "https://hbhahtluthtsswqavexa.supabase.co/functions/v1",
-    private val anonKey: String = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhiaGFodGx1dGh0c3N3cWF2ZXhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NDM4MTcsImV4cCI6MjEwODQxOTgxN30.ZaCR1YjhI3lIcK7z0HAl4tRaiF3UrXnFP0USim7oakM"
+    private var baseUrl: String = "",
+    private var anonKey: String = ""
 ) {
+    fun updateCredentials(serverUrl: String, key: String) {
+        if (serverUrl.isNotBlank()) this.baseUrl = "${serverUrl.trimEnd('/')}/functions/v1"
+        if (key.isNotBlank()) this.anonKey = key.trim()
+    }
+
+    fun getBaseUrl(): String = baseUrl
+    fun getAnonKey(): String = anonKey
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
