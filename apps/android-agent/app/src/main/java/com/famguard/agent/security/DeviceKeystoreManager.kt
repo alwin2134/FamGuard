@@ -75,7 +75,7 @@ class DeviceKeystoreManager(context: Context) {
         if (!saved.isNullOrBlank()) return saved.trimEnd('/')
         val defaultUrl = com.famguard.agent.BuildConfig.DEFAULT_SUPABASE_URL
         if (defaultUrl.isNotBlank()) return defaultUrl.trimEnd('/')
-        return "https://hbhahtluthtsswqavexa.supabase.co"
+        return ""
     }
 
     fun getAnonKey(): String {
@@ -83,7 +83,7 @@ class DeviceKeystoreManager(context: Context) {
         if (!saved.isNullOrBlank()) return saved.trim()
         val defaultKey = com.famguard.agent.BuildConfig.DEFAULT_SUPABASE_ANON_KEY
         if (defaultKey.isNotBlank()) return defaultKey.trim()
-        return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhiaGFodGx1dGh0c3N3cWF2ZXhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NDM4MTcsImV4cCI6MjEwODQxOTgxN30.ZaCR1YjhI3lIcK7z0HAl4tRaiF3UrXnFP0USim7oakM"
+        return ""
     }
 
     suspend fun testConnection(serverUrl: String, anonKey: String): Result<String> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

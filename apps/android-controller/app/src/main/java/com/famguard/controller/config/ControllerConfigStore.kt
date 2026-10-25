@@ -37,7 +37,7 @@ class ControllerConfigStore(context: Context) {
         if (!saved.isNullOrBlank()) return saved.trimEnd('/')
         val defaultUrl = BuildConfig.DEFAULT_SUPABASE_URL
         if (defaultUrl.isNotBlank()) return defaultUrl.trimEnd('/')
-        return "https://hbhahtluthtsswqavexa.supabase.co"
+        return ""
     }
 
     fun getAnonKey(): String {
@@ -45,7 +45,7 @@ class ControllerConfigStore(context: Context) {
         if (!saved.isNullOrBlank()) return saved.trim()
         val defaultKey = BuildConfig.DEFAULT_SUPABASE_ANON_KEY
         if (defaultKey.isNotBlank()) return defaultKey.trim()
-        return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhiaGFodGx1dGh0c3N3cWF2ZXhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NDM4MTcsImV4cCI6MjEwODQxOTgxN30.ZaCR1YjhI3lIcK7z0HAl4tRaiF3UrXnFP0USim7oakM"
+        return ""
     }
 
     fun saveConfig(serverUrl: String, anonKey: String) {

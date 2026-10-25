@@ -74,8 +74,8 @@ fun ControllerMainScreen(
     var showSettingsDialog by remember { mutableStateOf(false) }
 
     // Auth state
-    var emailInput by remember { mutableStateOf("guardian@famguard.org") }
-    var passwordInput by remember { mutableStateOf("FamGuard#Secure2026") }
+    var emailInput by remember { mutableStateOf("") }
+    var passwordInput by remember { mutableStateOf("") }
     var authError by remember { mutableStateOf<String?>(null) }
     var isAuthLoading by remember { mutableStateOf(false) }
 
