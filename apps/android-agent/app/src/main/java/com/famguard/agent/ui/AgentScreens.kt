@@ -1168,7 +1168,8 @@ fun AgentSettingsDialog(
                     OutlinedTextField(
                         value = anonKeyInput,
                         onValueChange = { anonKeyInput = it },
-                        label = { Text("Anon / Public API Key") },
+                        label = { Text("Publishable API Key") },
+                        placeholder = { Text("sb_pub_... or anon key") },
                         modifier = Modifier.fillMaxWidth(),
                         visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         trailingIcon = {
