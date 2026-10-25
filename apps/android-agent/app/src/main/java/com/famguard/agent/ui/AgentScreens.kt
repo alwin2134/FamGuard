@@ -131,6 +131,25 @@ fun AgentMainScreen(
         hasCameraPerm = checkHasCamera(context)
     }
 
+    // App-launch Auto-Update Check
+    var appLaunchUpdateInfo by remember { mutableStateOf<AgentUpdateInfo?>(null) }
+    var isAppLaunchDownloading by remember { mutableStateOf(false) }
+    var appLaunchDownloadProgress by remember { mutableStateOf(0f) }
+    var appLaunchUpdateError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val res = AgentUpdateManager.checkForUpdates()
+            res.onSuccess { info ->
+                if (info != null && info.isNewer) {
+                    appLaunchUpdateInfo = info
+                }
+            }
+        } catch (_: Exception) {
+            // Non-blocking on app launch
+        }
+    }
+
     // Automatically trigger comprehensive permission request on launch
     LaunchedEffect(Unit) {
         val needed = mutableListOf<String>()
@@ -807,6 +826,132 @@ fun AgentMainScreen(
                     Text("Decline")
                 }
             }
+        )
+    }
+
+    // App-launch Update Available Dialog
+    if (appLaunchUpdateInfo != null) {
+        val info = appLaunchUpdateInfo!!
+        AlertDialog(
+            onDismissRequest = {
+                if (!isAppLaunchDownloading) {
+                    appLaunchUpdateInfo = null
+                }
+            },
+            icon = {
+                Icon(
+                    Icons.Default.SystemUpdate,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "New Update Available!",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "A newer version of FamGuard Agent (${info.tagName}) is available on GitHub Releases.",
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = "Current: v${BuildConfig.VERSION_NAME}  →  Latest: ${info.tagName}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (info.changelog.isNotBlank()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = "What's New:",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = info.changelog.take(300),
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    if (isAppLaunchDownloading) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            LinearProgressIndicator(
+                                progress = { appLaunchDownloadProgress },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                text = "Downloading update... ${(appLaunchDownloadProgress * 100).toInt()}%",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    if (appLaunchUpdateError != null) {
+                        Text(
+                            text = appLaunchUpdateError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        isAppLaunchDownloading = true
+                        appLaunchUpdateError = null
+                        coroutineScope.launch {
+                            val res = AgentUpdateManager.downloadAndInstallApk(
+                                context = context,
+                                downloadUrl = info.downloadUrl,
+                                fileName = info.fileName,
+                                onProgress = { p -> appLaunchDownloadProgress = p }
+                            )
+                            res.onFailure { err ->
+                                appLaunchUpdateError = "Update failed: ${err.message}"
+                                isAppLaunchDownloading = false
+                            }
+                        }
+                    },
+                    enabled = !isAppLaunchDownloading
+                ) {
+                    Text(if (isAppLaunchDownloading) "Downloading..." else "Update Now")
+                }
+            },
+            dismissButton = {
+                if (!isAppLaunchDownloading) {
+                    OutlinedButton(onClick = { appLaunchUpdateInfo = null }) {
+                        Text("Later")
+                    }
+                }
+            }
+        )
+    }
+
+    if (showSettingsDialog) {
+        AgentSettingsDialog(
+            keystoreManager = keystoreManager,
+            apiClient = apiClient,
+            onDismiss = { showSettingsDialog = false }
         )
     }
 }

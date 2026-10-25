@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       create_release:
@@ -12,7 +14,7 @@ on:
         type: boolean
         default: true
       tag_name:
-        description: 'Release tag name (e.g. v1.0.1 - required if not running on tag push)'
+        description: 'Release tag name (e.g. v1.0.1 - defaults to v1.0.<run_number> if blank)'
         required: false
         type: string
 
@@ -69,8 +71,12 @@ jobs:
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
             echo "should_release=true" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event.inputs.create_release }}" = "true" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
-            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.create_release }}" = "true" ]; then
+            if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+              echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+            else
+              echo "tag=v1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
+            fi
             echo "should_release=true" >> $GITHUB_OUTPUT
           else
             echo "should_release=false" >> $GITHUB_OUTPUT
