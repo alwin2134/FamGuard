@@ -148,6 +148,56 @@ class CommandExecutor(
                     failureReason = e.message
                 }
             }
+
+            CommandAction.START_SCREEN_MIRROR -> {
+                try {
+                    com.famguard.agent.mirror.ScreenCapturePermissionActivity.start(context)
+                    resultStatus = CommandStatus.SUCCEEDED
+                    android.util.Log.d("CommandExecutor", "Triggered ScreenCapturePermissionActivity for START_SCREEN_MIRROR")
+                } catch (e: Exception) {
+                    resultStatus = CommandStatus.FAILED
+                    failureReason = e.message
+                }
+            }
+
+            CommandAction.STOP_SCREEN_MIRROR -> {
+                try {
+                    com.famguard.agent.mirror.ScreenMirroringService.stopService(context)
+                    resultStatus = CommandStatus.SUCCEEDED
+                    android.util.Log.d("CommandExecutor", "Stopped ScreenMirroringService")
+                } catch (e: Exception) {
+                    resultStatus = CommandStatus.FAILED
+                    failureReason = e.message
+                }
+            }
+
+            CommandAction.START_VOICE_CALL -> {
+                try {
+                    val payload = command.payloadJson?.let { JSONObject(it.toString()) }
+                    val offerSdp = payload?.optString("offer_sdp")
+                    com.famguard.agent.call.IncomingCallActivity.start(context, offerSdp)
+                    resultStatus = CommandStatus.SUCCEEDED
+                    android.util.Log.d("CommandExecutor", "Launched IncomingCallActivity for START_VOICE_CALL")
+                } catch (e: Exception) {
+                    resultStatus = CommandStatus.FAILED
+                    failureReason = e.message
+                }
+            }
+
+            CommandAction.END_VOICE_CALL -> {
+                try {
+                    com.famguard.agent.call.VoiceCallService.endCall(context)
+                    resultStatus = CommandStatus.SUCCEEDED
+                    android.util.Log.d("CommandExecutor", "Ended VoiceCallService")
+                } catch (e: Exception) {
+                    resultStatus = CommandStatus.FAILED
+                    failureReason = e.message
+                }
+            }
+
+            CommandAction.WEBRTC_SIGNAL -> {
+                resultStatus = CommandStatus.SUCCEEDED
+            }
         }
 
         // Send final ACK to server

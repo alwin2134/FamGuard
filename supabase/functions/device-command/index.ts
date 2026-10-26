@@ -10,7 +10,10 @@ Deno.serve(async (req: Request) => {
     const { user } = await authenticateGuardian(req);
     const { device_id, action, payload = {} } = await req.json();
 
-    const allowedActions = ['refresh_location', 'ring', 'lock_app', 'unlock_app', 'sync_activity', 'stop_location'];
+    const allowedActions = [
+      'refresh_location', 'ring', 'lock_app', 'unlock_app', 'sync_activity', 'stop_location',
+      'start_screen_mirror', 'stop_screen_mirror', 'start_voice_call', 'end_voice_call', 'webrtc_signal'
+    ];
     if (!device_id || !action || !allowedActions.includes(action)) {
       return new Response(JSON.stringify({ error: `Valid device_id and supported action (${allowedActions.join(', ')}) required` }), {
         status: 400,

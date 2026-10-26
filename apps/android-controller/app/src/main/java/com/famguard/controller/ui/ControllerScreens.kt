@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import com.famguard.contracts.*
 import com.famguard.controller.auth.ControllerApiClient
 import com.famguard.controller.devices.QrCodeGenerator
+import com.famguard.controller.webrtc.ControllerWebRtcManager
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.*
@@ -54,6 +55,7 @@ import com.famguard.controller.BuildConfig
 enum class ControllerScreenTab {
     DASHBOARD,
     MAP,
+    LIVE_SCREEN,
     APP_DRAWER,
     ACTIVITY,
     COMMANDS
@@ -72,6 +74,9 @@ fun ControllerMainScreen(
 
     // Settings dialog state
     var showSettingsDialog by remember { mutableStateOf(false) }
+
+    // Voice Call dialog state
+    var showVoiceCallDialog by remember { mutableStateOf(false) }
 
     // Auth state
     var emailInput by remember { mutableStateOf("") }
@@ -445,6 +450,11 @@ fun ControllerMainScreen(
                         }
                     },
                     actions = {
+                        if (selectedDevice != null) {
+                            IconButton(onClick = { showVoiceCallDialog = true }) {
+                                Icon(Icons.Default.Phone, contentDescription = "Voice Call", tint = Color(0xFF2E7D32))
+                            }
+                        }
                         IconButton(onClick = { refreshDevices() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh Devices")
                         }
@@ -476,13 +486,19 @@ fun ControllerMainScreen(
                         selected = currentTab == ControllerScreenTab.MAP,
                         onClick = { currentTab = ControllerScreenTab.MAP },
                         icon = { Icon(Icons.Default.Map, contentDescription = null) },
-                        label = { Text("Live Map") }
+                        label = { Text("Map") }
+                    )
+                    NavigationBarItem(
+                        selected = currentTab == ControllerScreenTab.LIVE_SCREEN,
+                        onClick = { currentTab = ControllerScreenTab.LIVE_SCREEN },
+                        icon = { Icon(Icons.Default.ScreenShare, contentDescription = null) },
+                        label = { Text("Screen") }
                     )
                     NavigationBarItem(
                         selected = currentTab == ControllerScreenTab.APP_DRAWER,
                         onClick = { currentTab = ControllerScreenTab.APP_DRAWER },
                         icon = { Icon(Icons.Default.Apps, contentDescription = null) },
-                        label = { Text("App Drawer") }
+                        label = { Text("Apps") }
                     )
                     NavigationBarItem(
                         selected = currentTab == ControllerScreenTab.ACTIVITY,
@@ -557,6 +573,13 @@ fun ControllerMainScreen(
                                 }
                             },
                             statusMessage = locationStatusMessage
+                        )
+                    }
+                    ControllerScreenTab.LIVE_SCREEN -> {
+                        LiveScreenMirrorTab(
+                            device = selectedDevice,
+                            apiClient = apiClient,
+                            onStartVoiceCall = { showVoiceCallDialog = true }
                         )
                     }
                     ControllerScreenTab.APP_DRAWER -> {
@@ -796,6 +819,14 @@ fun ControllerMainScreen(
                     Text("Done")
                 }
             }
+        )
+    }
+
+    if (showVoiceCallDialog) {
+        ActiveVoiceCallDialog(
+            device = selectedDevice,
+            apiClient = apiClient,
+            onDismiss = { showVoiceCallDialog = false }
         )
     }
 }
@@ -1762,6 +1793,32 @@ fun DeviceCommandsScreen(
             }
         }
 
+        // Live Screen & Voice Call Actions
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Button(
+                onClick = { onSendCommand(CommandAction.START_SCREEN_MIRROR, emptyMap()) },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.ScreenShare, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Start Mirror")
+            }
+
+            Button(
+                onClick = { onSendCommand(CommandAction.START_VOICE_CALL, emptyMap()) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Voice Call")
+            }
+        }
+
         // App Lock & Overlay Controls Section
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -2182,3 +2239,654 @@ fun ControllerSettingsDialog(
         }
     )
 }
+
+@Composable
+fun LiveScreenMirrorTab(
+    device: Device?,
+    apiClient: ControllerApiClient,
+    onStartVoiceCall: () -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var rtcManager by remember { mutableStateOf<ControllerWebRtcManager?>(null) }
+    var isMirroringActive by remember { mutableStateOf(false) }
+    var mirrorStatus by remember { mutableStateOf("Idle - Ready to connect to screen") }
+    var isConnecting by remember { mutableStateOf(false) }
+    var rendererRef by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
+
+    fun stopMirroring() {
+        if (device != null) {
+            coroutineScope.launch {
+                apiClient.dispatchCommand(device.id, CommandAction.STOP_SCREEN_MIRROR)
+            }
+        }
+        rtcManager?.close()
+        rtcManager = null
+        isMirroringActive = false
+        isConnecting = false
+        mirrorStatus = "Screen mirroring stopped."
+    }
+
+    fun startMirroring() {
+        if (device == null) {
+            Toast.makeText(context, "Please select a device from the Dashboard first.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        isConnecting = true
+        mirrorStatus = "Sending request to ${device.name}..."
+
+        val rtc = ControllerWebRtcManager(context)
+        rtcManager = rtc
+
+        rendererRef?.let { rtc.attachVideoRenderer(it) }
+
+        rtc.createPeerConnection(includeAudio = false)
+
+        rtc.onLocalSdpGenerated = { sdp ->
+            coroutineScope.launch {
+                val payload = org.json.JSONObject().apply {
+                    put("type", "answer")
+                    put("data", sdp.description)
+                    put("stream_type", "screen_mirror")
+                }
+                apiClient.sendSignal(device.id, payload.toString())
+            }
+        }
+
+        rtc.onLocalIceCandidateGenerated = { candidate ->
+            coroutineScope.launch {
+                val payload = org.json.JSONObject().apply {
+                    put("type", "ice_candidate")
+                    put("stream_type", "screen_mirror")
+                    put("data", org.json.JSONObject().apply {
+                        put("sdpMid", candidate.sdpMid)
+                        put("sdpMLineIndex", candidate.sdpMLineIndex)
+                        put("candidate", candidate.sdp)
+                    }.toString())
+                }
+                apiClient.sendSignal(device.id, payload.toString())
+            }
+        }
+
+        rtc.onRemoteVideoTrackReceived = {
+            isMirroringActive = true
+            isConnecting = false
+            mirrorStatus = "Live Screen Mirroring Active (HD / 30fps)"
+        }
+
+        rtc.onCallEnded = {
+            isMirroringActive = false
+            isConnecting = false
+            mirrorStatus = "Mirroring session disconnected."
+        }
+
+        coroutineScope.launch {
+            val res = apiClient.dispatchCommand(device.id, CommandAction.START_SCREEN_MIRROR)
+            res.fold(
+                onSuccess = {
+                    mirrorStatus = "Awaiting consent on ${device.name}..."
+                },
+                onFailure = { err ->
+                    isConnecting = false
+                    mirrorStatus = "Failed to dispatch command: ${err.message}"
+                }
+            )
+        }
+
+        coroutineScope.launch {
+            while (isActive && (isConnecting || isMirroringActive)) {
+                try {
+                    val signals = apiClient.fetchIncomingSignals(device.id, "screen_mirror")
+                    for (sigStr in signals) {
+                        val obj = org.json.JSONObject(sigStr)
+                        val type = obj.optString("type")
+                        val data = obj.optString("data")
+
+                        when (type) {
+                            "offer" -> {
+                                val sdp = org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, data)
+                                rtc.setRemoteDescription(sdp) {
+                                    rtc.createAnswer { }
+                                }
+                            }
+                            "ice_candidate" -> {
+                                val candObj = org.json.JSONObject(data)
+                                val candidate = org.webrtc.IceCandidate(
+                                    candObj.getString("sdpMid"),
+                                    candObj.getInt("sdpMLineIndex"),
+                                    candObj.getString("candidate")
+                                )
+                                rtc.addIceCandidate(candidate)
+                            }
+                            "stop" -> {
+                                stopMirroring()
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("LiveScreenMirrorTab", "Error polling signals: ${e.message}")
+                }
+                delay(1200)
+            }
+        }
+    }
+
+    DisposableEffect(device?.id) {
+        onDispose {
+            stopMirroring()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Live Screen Mirror", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Text(
+                    text = if (device != null) "Target: ${device.name}" else "No device selected",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (isMirroringActive || isConnecting) {
+                    Button(
+                        onClick = { stopMirroring() },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Stop")
+                    }
+                } else {
+                    Button(
+                        onClick = { startMirroring() },
+                        enabled = device != null,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Start Mirror")
+                    }
+                }
+
+                FilledTonalButton(onClick = onStartVoiceCall, enabled = device != null) {
+                    Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Call")
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = if (isMirroringActive) Color(0xFF2E7D32).copy(alpha = 0.12f)
+                else MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .background(
+                            if (isMirroringActive) Color(0xFF2E7D32)
+                            else if (isConnecting) Color(0xFFD97706)
+                            else Color.Gray,
+                            CircleShape
+                        )
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = mirrorStatus,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isConnecting) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.Black)
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        org.webrtc.SurfaceViewRenderer(ctx).apply {
+                            rendererRef = this
+                            rtcManager?.attachVideoRenderer(this)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                    update = { view ->
+                        rendererRef = view
+                    }
+                )
+
+                if (!isMirroringActive) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.padding(32.dp)
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(72.dp),
+                            shape = CircleShape,
+                            color = Color.White.copy(alpha = 0.1f)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = if (isConnecting) Icons.Default.Sync else Icons.Default.ScreenShare,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = if (isConnecting) "Requesting Screen Access..." else "Screen Mirroring Inactive",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+
+                        Text(
+                            text = if (isConnecting) "The target device user is prompted with an Android permission dialog to start mirroring."
+                            else "Tap 'Start Mirror' to securely inspect the child's screen in real time with hardware-accelerated WebRTC.",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                } else {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(12.dp),
+                        color = Color.Black.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(Color(0xFF2E7D32), CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "HD LIVE • 0 COST P2P",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ActiveVoiceCallDialog(
+    device: Device?,
+    apiClient: ControllerApiClient,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var callMode by remember { mutableStateOf("webrtc") }
+    var callStatus by remember { mutableStateOf("Connecting to ${device?.name ?: "child"}...") }
+    var isConnected by remember { mutableStateOf(false) }
+    var isMuted by remember { mutableStateOf(false) }
+    var isSpeakerOn by remember { mutableStateOf(true) }
+    var durationSeconds by remember { mutableIntStateOf(0) }
+
+    var rtcManager by remember { mutableStateOf<ControllerWebRtcManager?>(null) }
+    var wifiDirectEngine by remember { mutableStateOf<com.famguard.controller.call.WifiDirectAudioEngine?>(null) }
+
+    fun endCall() {
+        if (device != null) {
+            coroutineScope.launch {
+                apiClient.dispatchCommand(device.id, CommandAction.END_VOICE_CALL)
+            }
+        }
+        rtcManager?.close()
+        rtcManager = null
+        wifiDirectEngine?.stop()
+        wifiDirectEngine = null
+        onDismiss()
+    }
+
+    LaunchedEffect(isConnected) {
+        if (isConnected) {
+            while (isActive) {
+                delay(1000)
+                durationSeconds++
+            }
+        }
+    }
+
+    fun startWebRtcCall() {
+        if (device == null) return
+        callMode = "webrtc"
+        callStatus = "Initiating HD Audio Call..."
+        wifiDirectEngine?.stop()
+        wifiDirectEngine = null
+
+        val rtc = ControllerWebRtcManager(context)
+        rtcManager = rtc
+        rtc.startAudioTrack()
+        rtc.createPeerConnection(includeAudio = true)
+
+        rtc.onLocalSdpGenerated = { sdp ->
+            coroutineScope.launch {
+                val payload = org.json.JSONObject().apply {
+                    put("type", "offer")
+                    put("data", sdp.description)
+                    put("stream_type", "voice_call")
+                }
+                apiClient.sendSignal(device.id, payload.toString())
+            }
+        }
+
+        rtc.onLocalIceCandidateGenerated = { candidate ->
+            coroutineScope.launch {
+                val payload = org.json.JSONObject().apply {
+                    put("type", "ice_candidate")
+                    put("stream_type", "voice_call")
+                    put("data", org.json.JSONObject().apply {
+                        put("sdpMid", candidate.sdpMid)
+                        put("sdpMLineIndex", candidate.sdpMLineIndex)
+                        put("candidate", candidate.sdp)
+                    }.toString())
+                }
+                apiClient.sendSignal(device.id, payload.toString())
+            }
+        }
+
+        rtc.onCallEnded = {
+            callStatus = "Call ended."
+            endCall()
+        }
+
+        rtc.createOffer { sdp ->
+            coroutineScope.launch {
+                apiClient.dispatchCommand(
+                    device.id,
+                    CommandAction.START_VOICE_CALL,
+                    mapOf("offer_sdp" to sdp.description)
+                )
+            }
+        }
+
+        coroutineScope.launch {
+            while (isActive && callMode == "webrtc") {
+                try {
+                    val signals = apiClient.fetchIncomingSignals(device.id, "voice_call")
+                    for (sigStr in signals) {
+                        val obj = org.json.JSONObject(sigStr)
+                        val type = obj.optString("type")
+                        val data = obj.optString("data")
+
+                        when (type) {
+                            "answer" -> {
+                                val answerSdp = org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.ANSWER, data)
+                                rtc.setRemoteDescription(answerSdp) {
+                                    isConnected = true
+                                    callStatus = "Connected (HD Audio • Opus 48kHz)"
+                                }
+                            }
+                            "ice_candidate" -> {
+                                val candObj = org.json.JSONObject(data)
+                                val candidate = org.webrtc.IceCandidate(
+                                    candObj.getString("sdpMid"),
+                                    candObj.getInt("sdpMLineIndex"),
+                                    candObj.getString("candidate")
+                                )
+                                rtc.addIceCandidate(candidate)
+                            }
+                            "end_call" -> {
+                                endCall()
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("ActiveVoiceCallDialog", "Signal poll error: ${e.message}")
+                }
+                delay(1000)
+            }
+        }
+    }
+
+    fun switchToWifiDirect() {
+        callMode = "wifi_direct"
+        callStatus = "Activating Offline Wi-Fi Direct..."
+        isConnected = false
+        rtcManager?.close()
+        rtcManager = null
+
+        val engine = com.famguard.controller.call.WifiDirectAudioEngine(context)
+        wifiDirectEngine = engine
+        engine.onStatusChanged = { status ->
+            callStatus = status
+        }
+        engine.onConnected = {
+            isConnected = true
+            callStatus = "Connected (Offline Walkie-Talkie)"
+        }
+        engine.startP2pDiscovery()
+    }
+
+    fun callViaSimCard() {
+        try {
+            val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                data = Uri.parse("tel:")
+            }
+            context.startActivity(dialIntent)
+            endCall()
+        } catch (e: Exception) {
+            Toast.makeText(context, "Unable to launch dialer: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        startWebRtcCall()
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            rtcManager?.close()
+            wifiDirectEngine?.stop()
+        }
+    }
+
+    val minutes = durationSeconds / 60
+    val seconds = durationSeconds % 60
+    val durationFormatted = "%02d:%02d".format(minutes, seconds)
+
+    AlertDialog(
+        onDismissRequest = { endCall() },
+        title = null,
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Surface(
+                    color = if (callMode == "wifi_direct") Color(0xFF0284C7).copy(alpha = 0.15f)
+                    else Color(0xFF2E7D32).copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (callMode == "wifi_direct") Icons.Default.WifiTethering else Icons.Default.HeadsetMic,
+                            contentDescription = null,
+                            tint = if (callMode == "wifi_direct") Color(0xFF0284C7) else Color(0xFF2E7D32),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (callMode == "wifi_direct") "TIER 2: OFFLINE WALKIE-TALKIE" else "TIER 1: WEBRTC HD CALL",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (callMode == "wifi_direct") Color(0xFF0284C7) else Color(0xFF2E7D32)
+                        )
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.size(90.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.Person,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = device?.name ?: "Child Device",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 19.sp
+                    )
+                    Text(
+                        text = if (isConnected) durationFormatted else callStatus,
+                        fontSize = 13.sp,
+                        color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilledIconButton(
+                        onClick = {
+                            isMuted = !isMuted
+                            rtcManager?.setMicrophoneMute(isMuted)
+                        },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = if (isMuted) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        modifier = Modifier.size(52.dp)
+                    ) {
+                        Icon(
+                            if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                            contentDescription = "Mute"
+                        )
+                    }
+
+                    FloatingActionButton(
+                        onClick = { endCall() },
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = Color.White,
+                        modifier = Modifier.size(60.dp),
+                        shape = CircleShape
+                    ) {
+                        Icon(Icons.Default.CallEnd, contentDescription = "End Call", modifier = Modifier.size(28.dp))
+                    }
+
+                    FilledIconButton(
+                        onClick = {
+                            isSpeakerOn = !isSpeakerOn
+                            rtcManager?.setSpeakerphone(isSpeakerOn)
+                        },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = if (isSpeakerOn) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        modifier = Modifier.size(52.dp)
+                    ) {
+                        Icon(
+                            if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.Default.VolumeMute,
+                            contentDescription = "Speaker"
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                Text(
+                    "Zero-Cost & Offline Fallback Modes",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.outline
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { switchToWifiDirect() },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Default.WifiTethering, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Walkie-Talkie", fontSize = 11.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = { callViaSimCard() },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Default.SimCard, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Cellular SIM", fontSize = 11.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = null
+    )
+}
+

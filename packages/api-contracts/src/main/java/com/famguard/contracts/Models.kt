@@ -67,7 +67,17 @@ enum class CommandAction {
     @SerialName("sync_activity")
     SYNC_ACTIVITY,
     @SerialName("stop_location")
-    STOP_LOCATION
+    STOP_LOCATION,
+    @SerialName("start_screen_mirror")
+    START_SCREEN_MIRROR,
+    @SerialName("stop_screen_mirror")
+    STOP_SCREEN_MIRROR,
+    @SerialName("start_voice_call")
+    START_VOICE_CALL,
+    @SerialName("end_voice_call")
+    END_VOICE_CALL,
+    @SerialName("webrtc_signal")
+    WEBRTC_SIGNAL
 }
 
 @Serializable

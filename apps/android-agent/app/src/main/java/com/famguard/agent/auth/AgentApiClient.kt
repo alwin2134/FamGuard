@@ -127,6 +127,81 @@ class AgentApiClient(
         }
     }
 
+    private val seenSignalIds = mutableSetOf<String>()
+
+    suspend fun sendSignal(deviceId: String, deviceSecret: String, payloadJson: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            ensureCredentials()
+            val parsedPayload = org.json.JSONObject(payloadJson)
+            val streamType = parsedPayload.optString("stream_type", "screen_mirror")
+            val signalType = parsedPayload.optString("type", "unknown")
+
+            val postgrestUrl = baseUrl.replace("/functions/v1", "/rest/v1") + "/webrtc_signals"
+            val insertObj = org.json.JSONObject().apply {
+                put("device_id", deviceId)
+                put("sender_type", "agent")
+                put("stream_type", streamType)
+                put("signal_type", signalType)
+                put("payload", parsedPayload)
+            }
+            val req = Request.Builder()
+                .url(postgrestUrl)
+                .post(insertObj.toString().toRequestBody(jsonMediaType))
+                .addHeader("apikey", anonKey)
+                .addHeader("Authorization", "Bearer $anonKey")
+                .addHeader("Prefer", "return=minimal")
+                .build()
+
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    Result.failure(IOException("Failed to send WebRTC signal (${resp.code}): ${resp.body?.string()}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchIncomingSignals(deviceId: String, deviceSecret: String, streamType: String): List<String> = withContext(Dispatchers.IO) {
+        try {
+            ensureCredentials()
+            val postgrestUrl = baseUrl.replace("/functions/v1", "/rest/v1") +
+                "/webrtc_signals?device_id=eq.$deviceId&sender_type=eq.controller&stream_type=eq.$streamType&order=created_at.asc&limit=15"
+
+            val req = Request.Builder()
+                .url(postgrestUrl)
+                .get()
+                .addHeader("apikey", anonKey)
+                .addHeader("Authorization", "Bearer $anonKey")
+                .build()
+
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: "[]"
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val array = org.json.JSONArray(body)
+                val newSignals = mutableListOf<String>()
+                for (i in 0 until array.length()) {
+                    val item = array.getJSONObject(i)
+                    val id = item.optString("id")
+                    if (id.isNotBlank() && !seenSignalIds.contains(id)) {
+                        seenSignalIds.add(id)
+                        val payload = item.optJSONObject("payload")
+                        if (payload != null) {
+                            newSignals.add(payload.toString())
+                        } else {
+                            newSignals.add(item.toString())
+                        }
+                    }
+                }
+                newSignals
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     private suspend inline fun <reified T> post(pathOrUrl: String, jsonBody: String): Result<T> =
         withContext(Dispatchers.IO) {
             try {
@@ -158,3 +233,4 @@ class AgentApiClient(
             }
         }
 }
+

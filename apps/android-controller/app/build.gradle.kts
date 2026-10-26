@@ -129,6 +129,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 
+    // WebRTC for Screen Mirroring and Voice Calling
+    implementation(libs.stream.webrtc)
+
     // Room
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
