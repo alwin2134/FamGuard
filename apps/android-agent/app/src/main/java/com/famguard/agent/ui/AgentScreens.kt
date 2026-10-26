@@ -10,6 +10,7 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -244,11 +245,10 @@ fun AgentMainScreen(
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.Security,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
+                        Image(
+                            painter = androidx.compose.ui.res.painterResource(id = com.famguard.agent.R.drawable.famguard_logo),
+                            contentDescription = "FamGuard Logo",
+                            modifier = Modifier.size(28.dp).clip(CircleShape)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("FamGuard Agent", fontWeight = FontWeight.Bold)

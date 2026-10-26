@@ -354,11 +354,10 @@ fun ControllerMainScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Shield,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(32.dp)
+                            Image(
+                                painter = androidx.compose.ui.res.painterResource(id = com.famguard.controller.R.drawable.famguard_logo),
+                                contentDescription = "FamGuard Logo",
+                                modifier = Modifier.size(36.dp).clip(CircleShape)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text("Guardian Cloud Sign In", fontWeight = FontWeight.Bold, fontSize = 20.sp)
@@ -440,13 +439,21 @@ fun ControllerMainScreen(
             topBar = {
                 TopAppBar(
                     title = {
-                        Column {
-                            Text("FamGuard Controller", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                            Text(
-                                text = selectedDevice?.name ?: "No device selected",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Image(
+                                painter = androidx.compose.ui.res.painterResource(id = com.famguard.controller.R.drawable.famguard_logo),
+                                contentDescription = "FamGuard Logo",
+                                modifier = Modifier.size(28.dp).clip(CircleShape)
                             )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("FamGuard Controller", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                                Text(
+                                    text = selectedDevice?.name ?: "No device selected",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     },
                     actions = {
