@@ -27,10 +27,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+
 class IncomingCallActivity : ComponentActivity() {
 
     private var ringtone: Ringtone? = null
     private var vibrator: Vibrator? = null
+
+    private val recordAudioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        val offerSdp = intent.getStringExtra(EXTRA_OFFER_SDP)
+        stopRinging()
+        if (isGranted) {
+            VoiceCallService.startCall(this, offerSdp)
+        } else {
+            VoiceCallService.endCall(this)
+        }
+        finish()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,9 +67,18 @@ class IncomingCallActivity : ComponentActivity() {
             MaterialTheme {
                 IncomingCallScreen(
                     onAccept = {
-                        stopRinging()
-                        VoiceCallService.startCall(this@IncomingCallActivity, offerSdp)
-                        finish()
+                        val hasMic = ContextCompat.checkSelfPermission(
+                            this@IncomingCallActivity,
+                            Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+
+                        if (hasMic) {
+                            stopRinging()
+                            VoiceCallService.startCall(this@IncomingCallActivity, offerSdp)
+                            finish()
+                        } else {
+                            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
                     },
                     onDecline = {
                         stopRinging()

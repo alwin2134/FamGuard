@@ -59,16 +59,25 @@ class VoiceCallService : Service() {
 
         val remoteOfferSdp = intent.getStringExtra(EXTRA_REMOTE_OFFER)
 
-        // Start Foreground Notification
-        val notification = createNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        // Start Foreground Notification safely
+        try {
+            val notification = createNotification()
+            val hasMic = androidx.core.content.ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && hasMic) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground notification: ${e.message}", e)
         }
 
         configureAudioMode()
@@ -99,8 +108,12 @@ class VoiceCallService : Service() {
 
     private fun startVoiceCallPipeline(remoteOfferSdp: String?) {
         val rtc = webRtcManager ?: return
-        rtc.startAudioTrack()
-        rtc.createPeerConnection(includeVideo = false, includeAudio = true)
+        try {
+            rtc.startAudioTrack()
+            rtc.createPeerConnection(includeVideo = false, includeAudio = true)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize WebRTC audio: ${e.message}", e)
+        }
 
         rtc.onLocalSdpGenerated = { sdp ->
             sendSignalToController("answer", sdp.description)

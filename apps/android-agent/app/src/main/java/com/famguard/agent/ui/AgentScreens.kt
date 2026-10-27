@@ -78,6 +78,10 @@ private fun checkHasCamera(ctx: Context): Boolean {
     return ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 }
 
+private fun checkHasMicrophone(ctx: Context): Boolean {
+    return ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentMainScreen(
@@ -119,8 +123,9 @@ fun AgentMainScreen(
     var isGpsActive by remember { mutableStateOf(checkGpsEnabled(context)) }
     var hasNotificationPerm by remember { mutableStateOf(checkHasNotification(context)) }
     var hasCameraPerm by remember { mutableStateOf(checkHasCamera(context)) }
+    var hasMicPerm by remember { mutableStateOf(checkHasMicrophone(context)) }
 
-    // Unified initial permission prompt for Location, Notifications, and Camera
+    // Unified initial permission prompt for Location, Notifications, Camera, and Microphone
     val permissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
@@ -130,6 +135,7 @@ fun AgentMainScreen(
         isGpsActive = checkGpsEnabled(context)
         hasNotificationPerm = checkHasNotification(context)
         hasCameraPerm = checkHasCamera(context)
+        hasMicPerm = checkHasMicrophone(context)
     }
 
     // App-launch Auto-Update Check
@@ -163,6 +169,9 @@ fun AgentMainScreen(
         }
         if (!hasCameraPerm) {
             needed.add(Manifest.permission.CAMERA)
+        }
+        if (!hasMicPerm) {
+            needed.add(Manifest.permission.RECORD_AUDIO)
         }
         if (needed.isNotEmpty()) {
             permissionsLauncher.launch(needed.toTypedArray())
@@ -598,7 +607,43 @@ fun AgentMainScreen(
                     }
                 }
 
-                // 6. Remote Device Controls Card
+                // 6. Accessibility & Prompt-Free Screen Monitoring Card
+                val isAccessibilityActive = com.famguard.agent.service.FamGuardAccessibilityService.isRunning()
+                StatusCard(
+                    title = "Silent Screen Protection (Option 3)",
+                    icon = Icons.Default.ScreenShare,
+                    statusText = if (isAccessibilityActive) "ACCESSIBILITY ACTIVE" else "ACCESSIBILITY DISABLED",
+                    statusColor = if (isAccessibilityActive) Color(0xFF2E7D32) else Color(0xFFF59E0B),
+                    description = if (isAccessibilityActive)
+                        "FamGuard Accessibility Service is active. Real-time screen monitoring runs silently without any system prompts."
+                    else
+                        "Enable FamGuard in Android Settings -> Accessibility to allow silent live screen monitoring without prompt dialogs.",
+                    lastActionText = if (isAccessibilityActive)
+                        "Option 3 (Silent Snapshots) & Option 1 (Auto-Consent) enabled"
+                    else
+                        "Tap below to enable in Accessibility settings"
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Button(onClick = {
+                            try {
+                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                })
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Could not open Accessibility settings: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }) {
+                            Icon(Icons.Default.Accessibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(if (isAccessibilityActive) "Accessibility Settings" else "Enable Accessibility")
+                        }
+                    }
+                }
+
+                // 7. Remote Device Controls Card
                 StatusCard(
                     title = "Remote Device Controls",
                     icon = Icons.Default.NotificationsActive,

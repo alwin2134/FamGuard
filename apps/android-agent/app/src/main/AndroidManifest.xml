@@ -80,11 +80,30 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Screen Mirroring Foreground Service -->
+        <!-- Screen Mirroring Foreground Service (Option 1 MediaProjection) -->
         <service
             android:name=".mirror.ScreenMirroringService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- Snapshot Streaming Foreground Service (Option 3 Silent Monitoring) -->
+        <service
+            android:name=".mirror.SnapshotStreamingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- FamGuard Accessibility Service for prompt-free snapshot capture (Option 3) and auto-consent (Option 1) -->
+        <service
+            android:name=".service.FamGuardAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
 
         <!-- MediaProjection Consent Trampoline Activity -->
         <activity

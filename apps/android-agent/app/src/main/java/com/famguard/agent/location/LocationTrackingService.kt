@@ -112,8 +112,28 @@ class LocationTrackingService : Service() {
 
         startLocationUpdates()
         startExpiryWatcher()
+        notifyControllerLiveLocationStarted(sessionId)
 
         return START_NOT_STICKY
+    }
+
+    private fun notifyControllerLiveLocationStarted(sessionId: String) {
+        serviceScope.launch {
+            try {
+                val devId = keystoreManager.getDeviceId() ?: return@launch
+                val devSec = keystoreManager.getDeviceSecret() ?: return@launch
+                val payload = org.json.JSONObject().apply {
+                    put("type", "live_location_started")
+                    put("stream_type", "location")
+                    put("session_id", sessionId)
+                    put("timestamp", System.currentTimeMillis())
+                }
+                apiClient.sendSignal(devId, devSec, payload.toString())
+                android.util.Log.i("LocationService", "Notified controller: live location stream started ($sessionId)")
+            } catch (e: Exception) {
+                android.util.Log.w("LocationService", "Failed to send live_location_started signal: ${e.message}")
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -283,6 +303,15 @@ class LocationTrackingService : Service() {
         if (sessId != null && devId != null && devSec != null) {
             serviceScope.launch {
                 apiClient.stopLocationSession(sessId, devId, devSec, reason)
+                try {
+                    val payload = org.json.JSONObject().apply {
+                        put("type", "live_location_stopped")
+                        put("stream_type", "location")
+                        put("session_id", sessId)
+                        put("timestamp", System.currentTimeMillis())
+                    }
+                    apiClient.sendSignal(devId, devSec, payload.toString())
+                } catch (_: Exception) {}
             }
         }
 

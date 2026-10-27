@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">FamGuard Agent</string>
+    <string name="accessibility_service_description">Provides parental screen monitoring and app protection for child safety.</string>
 </resources>

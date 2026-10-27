@@ -19,20 +19,70 @@ Deno.serve(async (req: Request) => {
 
     const admin = getServiceClient();
 
-    // Verify guardian role in this family
-    const { data: member, error: memberErr } = await admin
-      .from('family_members')
-      .select('role, display_name, families(name)')
-      .eq('family_id', family_id)
-      .eq('user_id', user.id)
-      .single();
+    // Check if the user is a guardian of the specified family, or ANY family
+    let member: any = null;
+    if (family_id && family_id !== '11111111-1111-1111-1111-111111111111') {
+      const { data: specificMember } = await admin
+        .from('family_members')
+        .select('family_id, role, display_name, families(name)')
+        .eq('family_id', family_id)
+        .eq('user_id', user.id)
+        .maybeSingle();
 
-    if (memberErr || !member || member.role !== 'guardian') {
-      return new Response(JSON.stringify({ error: 'Only authorized guardians can generate pairing tokens' }), {
-        status: 403,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+      if (specificMember && specificMember.role === 'guardian') {
+        member = specificMember;
+      }
     }
+
+    if (!member) {
+      // Look for ANY family where this authenticated user is a guardian
+      const { data: anyMember } = await admin
+        .from('family_members')
+        .select('family_id, role, display_name, families(name)')
+        .eq('user_id', user.id)
+        .eq('role', 'guardian')
+        .limit(1)
+        .maybeSingle();
+
+      if (anyMember) {
+        member = anyMember;
+      }
+    }
+
+    if (!member) {
+      // Auto-provision a default family for this guardian!
+      const familyName = user.email ? `${user.email.split('@')[0]}'s Family` : 'FamGuard Family';
+      const displayName = user.email ? user.email.split('@')[0] : 'Guardian';
+
+      const { data: newFamily, error: famErr } = await admin
+        .from('families')
+        .insert({ name: familyName })
+        .select('id, name')
+        .single();
+
+      if (famErr || !newFamily) {
+        throw new Error(famErr?.message ?? 'Failed to initialize guardian family');
+      }
+
+      const { data: newMember, error: memErr } = await admin
+        .from('family_members')
+        .insert({
+          family_id: newFamily.id,
+          user_id: user.id,
+          role: 'guardian',
+          display_name: displayName
+        })
+        .select('family_id, role, display_name, families(name)')
+        .single();
+
+      if (memErr || !newMember) {
+        throw new Error(memErr?.message ?? 'Failed to register guardian membership');
+      }
+
+      member = newMember;
+    }
+
+    const effectiveFamilyId = member.family_id;
 
     // Generate random 32-char token
     const randomBytes = new Uint8Array(24);
@@ -46,7 +96,7 @@ Deno.serve(async (req: Request) => {
     const { error: insertErr } = await admin
       .from('pairing_tokens')
       .insert({
-        family_id,
+        family_id: effectiveFamilyId,
         created_by: user.id,
         token_hash: tokenHash,
         target_name,
@@ -60,7 +110,7 @@ Deno.serve(async (req: Request) => {
 
     // Record audit event
     await admin.from('audit_events').insert({
-      family_id,
+      family_id: effectiveFamilyId,
       actor_id: user.id,
       actor_type: 'guardian',
       event_name: 'pairing_token_created',
@@ -69,7 +119,7 @@ Deno.serve(async (req: Request) => {
 
     const qrPayload = JSON.stringify({
       token,
-      family_id,
+      family_id: effectiveFamilyId,
       family_name: (member.families as any)?.name ?? 'FamGuard Family',
       guardian_name: member.display_name,
       server_url: Deno.env.get('SUPABASE_URL') ?? '',
@@ -79,7 +129,8 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({
       pairing_token: token,
       qr_payload: qrPayload,
-      expires_at: expiresAt
+      expires_at: expiresAt,
+      family_id: effectiveFamilyId
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }

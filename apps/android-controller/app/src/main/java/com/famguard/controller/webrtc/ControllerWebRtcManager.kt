@@ -29,6 +29,11 @@ class ControllerWebRtcManager(private val context: Context) {
     var onRemoteVideoTrackReceived: ((VideoTrack) -> Unit)? = null
     var onCallEnded: (() -> Unit)? = null
 
+    // DataChannel for real-time snapshot frames
+    var activeDataChannel: DataChannel? = null
+    var onDataChannelStateChange: ((DataChannel.State) -> Unit)? = null
+    var onDataMessageReceived: ((ByteArray) -> Unit)? = null
+
     init {
         initializeFactory()
     }
@@ -106,7 +111,11 @@ class ControllerWebRtcManager(private val context: Context) {
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
             override fun onAddStream(stream: MediaStream?) {}
             override fun onRemoveStream(stream: MediaStream?) {}
-            override fun onDataChannel(channel: DataChannel?) {}
+            override fun onDataChannel(channel: DataChannel?) {
+                Log.i(TAG, "Controller received remote DataChannel: ${channel?.label()}")
+                activeDataChannel = channel
+                setupDataChannelObserver(channel)
+            }
             override fun onRenegotiationNeeded() {}
 
             override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) {
@@ -123,6 +132,35 @@ class ControllerWebRtcManager(private val context: Context) {
         if (includeAudio && localAudioTrack != null) {
             peerConnection?.addTrack(localAudioTrack, listOf("CONTROLLER_MEDIA_STREAM"))
         }
+    }
+
+    fun createDataChannel(label: String = "screen_stream"): DataChannel? {
+        val dcInit = DataChannel.Init().apply {
+            ordered = false
+            maxRetransmits = 0
+        }
+        val dc = peerConnection?.createDataChannel(label, dcInit)
+        activeDataChannel = dc
+        setupDataChannelObserver(dc)
+        return dc
+    }
+
+    private fun setupDataChannelObserver(dc: DataChannel?) {
+        dc?.registerObserver(object : DataChannel.Observer {
+            override fun onBufferedAmountChange(previousAmount: Long) {}
+            override fun onStateChange() {
+                val state = dc.state()
+                Log.d(TAG, "Controller DataChannel state changed: $state")
+                onDataChannelStateChange?.invoke(state)
+            }
+            override fun onMessage(buffer: DataChannel.Buffer?) {
+                if (buffer != null) {
+                    val bytes = ByteArray(buffer.data.remaining())
+                    buffer.data.get(bytes)
+                    onDataMessageReceived?.invoke(bytes)
+                }
+            }
+        })
     }
 
     fun attachVideoRenderer(renderer: SurfaceViewRenderer) {

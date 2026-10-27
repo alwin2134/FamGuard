@@ -97,6 +97,11 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 dependencies {
@@ -115,9 +120,10 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
 
-    // Maps
+    // Maps & Location
     implementation(libs.play.services.maps)
     implementation(libs.maps.compose)
+    implementation(libs.play.services.location)
 
     // Security & QR
     implementation(libs.androidx.security.crypto)

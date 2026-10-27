@@ -16,6 +16,7 @@
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".FamGuardControllerApp"

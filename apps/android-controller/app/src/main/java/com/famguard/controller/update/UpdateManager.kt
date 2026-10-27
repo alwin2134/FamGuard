@@ -28,75 +28,115 @@ data class UpdateInfo(
 object UpdateManager {
     private const val GITHUB_REPO = "alwin2134/FamGuard"
     private const val RELEASES_API_URL = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
+    private const val RELEASES_WEB_URL = "https://github.com/$GITHUB_REPO/releases/latest"
+    private const val USER_AGENT = "FamGuard-Controller-App/1.0"
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private val noRedirectClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun checkForUpdates(): Result<UpdateInfo?> = withContext(Dispatchers.IO) {
+        // Strategy 1: Try GitHub REST API (yields rich changelog & asset lists)
         try {
             val req = Request.Builder()
                 .url(RELEASES_API_URL)
                 .addHeader("Accept", "application/vnd.github.v3+json")
+                .addHeader("User-Agent", USER_AGENT)
                 .get()
                 .build()
 
             httpClient.newCall(req).execute().use { response ->
-                if (!response.isSuccessful) {
-                    if (response.code == 404) {
-                        return@withContext Result.success(null) // No releases published yet
+                if (response.isSuccessful) {
+                    val bodyStr = response.body?.string() ?: ""
+                    if (bodyStr.isNotBlank()) {
+                        val releaseObj = json.parseToJsonElement(bodyStr).jsonObject
+                        val tagName = releaseObj["tag_name"]?.jsonPrimitive?.content ?: ""
+                        val releaseName = releaseObj["name"]?.jsonPrimitive?.content ?: tagName
+                        val changelog = releaseObj["body"]?.jsonPrimitive?.content ?: "Maintenance and stability improvements."
+
+                        val assets = releaseObj["assets"]?.jsonArray ?: JsonArray(emptyList())
+                        var targetDownloadUrl = ""
+                        var targetFileName = "famguard-controller.apk"
+
+                        for (asset in assets) {
+                            val aObj = asset.jsonObject
+                            val aName = aObj["name"]?.jsonPrimitive?.content ?: ""
+                            val downloadUrl = aObj["browser_download_url"]?.jsonPrimitive?.content ?: ""
+
+                            if (aName.contains("controller", ignoreCase = true) && aName.endsWith(".apk", ignoreCase = true)) {
+                                targetDownloadUrl = downloadUrl
+                                targetFileName = aName
+                                break
+                            } else if (aName.endsWith(".apk", ignoreCase = true) && targetDownloadUrl.isEmpty()) {
+                                targetDownloadUrl = downloadUrl
+                                targetFileName = aName
+                            }
+                        }
+
+                        if (targetDownloadUrl.isEmpty() && tagName.isNotBlank()) {
+                            targetDownloadUrl = "https://github.com/$GITHUB_REPO/releases/download/$tagName/famguard-controller.apk"
+                        }
+
+                        val isNewer = isVersionNewer(tagName, BuildConfig.VERSION_NAME)
+                        if (targetDownloadUrl.isNotEmpty()) {
+                            return@withContext Result.success(
+                                UpdateInfo(
+                                    tagName = tagName,
+                                    releaseName = releaseName,
+                                    changelog = changelog,
+                                    downloadUrl = targetDownloadUrl,
+                                    fileName = targetFileName,
+                                    isNewer = isNewer
+                                )
+                            )
+                        }
                     }
-                    return@withContext Result.failure(Exception("GitHub API error HTTP ${response.code}"))
                 }
+            }
+        } catch (_: Exception) {
+            // Fall back to web redirection
+        }
 
-                val bodyStr = response.body?.string() ?: return@withContext Result.success(null)
-                val releaseObj = json.parseToJsonElement(bodyStr).jsonObject
+        // Strategy 2: Query GitHub web latest release redirect (immune to GitHub API rate limits!)
+        try {
+            val webReq = Request.Builder()
+                .url(RELEASES_WEB_URL)
+                .addHeader("User-Agent", USER_AGENT)
+                .head()
+                .build()
 
-                val tagName = releaseObj["tag_name"]?.jsonPrimitive?.content ?: ""
-                val releaseName = releaseObj["name"]?.jsonPrimitive?.content ?: tagName
-                val changelog = releaseObj["body"]?.jsonPrimitive?.content ?: "Maintenance and stability improvements."
+            noRedirectClient.newCall(webReq).execute().use { response ->
+                val location = response.header("Location") ?: ""
+                val tag = if (location.contains("/releases/tag/")) {
+                    location.substringAfterLast("/releases/tag/").substringBefore("?").substringBefore("/").trim()
+                } else ""
 
-                val assets = releaseObj["assets"]?.jsonArray ?: JsonArray(emptyList())
-                var targetDownloadUrl = ""
-                var targetFileName = "famguard-controller.apk"
-
-                for (asset in assets) {
-                    val aObj = asset.jsonObject
-                    val aName = aObj["name"]?.jsonPrimitive?.content ?: ""
-                    val downloadUrl = aObj["browser_download_url"]?.jsonPrimitive?.content ?: ""
-
-                    if (aName.contains("controller", ignoreCase = true) && aName.endsWith(".apk", ignoreCase = true)) {
-                        targetDownloadUrl = downloadUrl
-                        targetFileName = aName
-                        break
-                    } else if (aName.endsWith(".apk", ignoreCase = true) && targetDownloadUrl.isEmpty()) {
-                        targetDownloadUrl = downloadUrl
-                        targetFileName = aName
-                    }
-                }
-
-                val cleanTag = tagName.removePrefix("v").trim()
-                val currentVersion = BuildConfig.VERSION_NAME.removePrefix("v").trim()
-                val isNewer = isVersionNewer(cleanTag, currentVersion)
-
-                if (targetDownloadUrl.isNotEmpty()) {
-                    Result.success(
+                if (tag.isNotBlank()) {
+                    val downloadUrl = "https://github.com/$GITHUB_REPO/releases/download/$tag/famguard-controller.apk"
+                    val isNewer = isVersionNewer(tag, BuildConfig.VERSION_NAME)
+                    return@withContext Result.success(
                         UpdateInfo(
-                            tagName = tagName,
-                            releaseName = releaseName,
-                            changelog = changelog,
-                            downloadUrl = targetDownloadUrl,
-                            fileName = targetFileName,
+                            tagName = tag,
+                            releaseName = "FamGuard Controller $tag",
+                            changelog = "Latest release on GitHub.",
+                            downloadUrl = downloadUrl,
+                            fileName = "famguard-controller.apk",
                             isNewer = isNewer
                         )
                     )
-                } else {
-                    Result.success(null)
                 }
             }
+            Result.success(null)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -104,8 +144,14 @@ object UpdateManager {
 
     private fun isVersionNewer(remote: String, current: String): Boolean {
         if (remote.isBlank() || current.isBlank()) return false
-        val remoteParts = remote.split(".").mapNotNull { it.toIntOrNull() }
-        val currentParts = current.split(".").mapNotNull { it.toIntOrNull() }
+        val cleanRemote = remote.removePrefix("v").trim()
+        val cleanCurrent = current.removePrefix("v").trim()
+        val remoteParts = cleanRemote.split(".").map { part ->
+            part.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
+        }
+        val currentParts = cleanCurrent.split(".").map { part ->
+            part.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
+        }
 
         val maxLen = maxOf(remoteParts.size, currentParts.size)
         for (i in 0 until maxLen) {
@@ -125,6 +171,7 @@ object UpdateManager {
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val destFile = File(context.cacheDir, fileName)
+            val tempFile = File(context.cacheDir, "$fileName.tmp")
 
             // If permission is not granted, prompt the user immediately before downloading
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
@@ -140,7 +187,12 @@ object UpdateManager {
                 )
             }
 
-            val req = Request.Builder().url(downloadUrl).get().build()
+            val req = Request.Builder()
+                .url(downloadUrl)
+                .addHeader("User-Agent", USER_AGENT)
+                .get()
+                .build()
+
             httpClient.newCall(req).execute().use { response ->
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(Exception("Download failed HTTP ${response.code}"))
@@ -151,7 +203,7 @@ object UpdateManager {
                 var downloadedBytes = 0L
 
                 body.byteStream().use { input ->
-                    FileOutputStream(destFile).use { output ->
+                    FileOutputStream(tempFile).use { output ->
                         val buffer = ByteArray(8 * 1024)
                         var bytesRead: Int
                         while (input.read(buffer).also { bytesRead = it } != -1) {
@@ -163,6 +215,11 @@ object UpdateManager {
                         }
                     }
                 }
+            }
+
+            if (tempFile.exists() && tempFile.length() > 0) {
+                if (destFile.exists()) destFile.delete()
+                tempFile.renameTo(destFile)
             }
 
             // Install APK

@@ -31,6 +31,11 @@ class WebRtcManager(private val context: Context) {
     var onLocalIceCandidateGenerated: ((IceCandidate) -> Unit)? = null
     var onCallEnded: (() -> Unit)? = null
 
+    // DataChannel for real-time snapshot streaming (Option 3)
+    var activeDataChannel: DataChannel? = null
+    var onDataChannelStateChange: ((DataChannel.State) -> Unit)? = null
+    var onDataMessageReceived: ((ByteArray) -> Unit)? = null
+
     init {
         initializeFactory()
     }
@@ -151,7 +156,11 @@ class WebRtcManager(private val context: Context) {
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
             override fun onAddStream(stream: MediaStream?) {}
             override fun onRemoveStream(stream: MediaStream?) {}
-            override fun onDataChannel(channel: DataChannel?) {}
+            override fun onDataChannel(channel: DataChannel?) {
+                Log.i(TAG, "DataChannel received from controller: ${channel?.label()}")
+                activeDataChannel = channel
+                setupDataChannelObserver(channel)
+            }
             override fun onRenegotiationNeeded() {}
             override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) {}
         })
@@ -162,6 +171,47 @@ class WebRtcManager(private val context: Context) {
         }
         if (includeVideo && localVideoTrack != null) {
             peerConnection?.addTrack(localVideoTrack, listOf("AGENT_MEDIA_STREAM"))
+        }
+    }
+
+    fun createDataChannel(label: String = "screen_stream"): DataChannel? {
+        val dcInit = DataChannel.Init().apply {
+            ordered = false
+            maxRetransmits = 0
+        }
+        val dc = peerConnection?.createDataChannel(label, dcInit)
+        activeDataChannel = dc
+        setupDataChannelObserver(dc)
+        return dc
+    }
+
+    private fun setupDataChannelObserver(dc: DataChannel?) {
+        dc?.registerObserver(object : DataChannel.Observer {
+            override fun onBufferedAmountChange(previousAmount: Long) {}
+            override fun onStateChange() {
+                val state = dc.state()
+                Log.d(TAG, "DataChannel state changed: $state")
+                onDataChannelStateChange?.invoke(state)
+            }
+            override fun onMessage(buffer: DataChannel.Buffer?) {
+                if (buffer != null) {
+                    val bytes = ByteArray(buffer.data.remaining())
+                    buffer.data.get(bytes)
+                    onDataMessageReceived?.invoke(bytes)
+                }
+            }
+        })
+    }
+
+    fun sendData(bytes: ByteArray): Boolean {
+        val dc = activeDataChannel ?: return false
+        if (dc.state() != DataChannel.State.OPEN) return false
+        return try {
+            val buffer = DataChannel.Buffer(java.nio.ByteBuffer.wrap(bytes), true)
+            dc.send(buffer)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send data over DataChannel: ${e.message}")
+            false
         }
     }
 

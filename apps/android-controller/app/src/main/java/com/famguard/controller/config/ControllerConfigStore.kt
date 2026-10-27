@@ -59,6 +59,35 @@ class ControllerConfigStore(context: Context) {
         return getServerUrl().isNotBlank() && getAnonKey().isNotBlank()
     }
 
+    fun saveSession(userId: String, email: String, accessToken: String, refreshToken: String = "") {
+        prefs.edit()
+            .putString("session_user_id", userId)
+            .putString("session_email", email)
+            .putString("session_access_token", accessToken)
+            .putString("session_refresh_token", refreshToken)
+            .apply()
+    }
+
+    fun getSession(): StoredSession? {
+        val token = prefs.getString("session_access_token", null) ?: return null
+        val userId = prefs.getString("session_user_id", null) ?: return null
+        val email = prefs.getString("session_email", "") ?: ""
+        val refreshToken = prefs.getString("session_refresh_token", "") ?: ""
+        if (token.isBlank() || userId.isBlank()) return null
+        return StoredSession(userId, email, token, refreshToken)
+    }
+
+    fun clearSession() {
+        prefs.edit()
+            .remove("session_user_id")
+            .remove("session_email")
+            .remove("session_access_token")
+            .remove("session_refresh_token")
+            .apply()
+    }
+
+    fun hasSession(): Boolean = getSession() != null
+
     suspend fun testConnection(serverUrl: String, anonKey: String): Result<String> = withContext(Dispatchers.IO) {
         try {
             val cleanUrl = serverUrl.trimEnd('/')
@@ -81,3 +110,10 @@ class ControllerConfigStore(context: Context) {
         }
     }
 }
+
+data class StoredSession(
+    val userId: String,
+    val email: String,
+    val accessToken: String,
+    val refreshToken: String = ""
+)
