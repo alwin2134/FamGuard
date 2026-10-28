@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS public.webrtc_signals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     device_id UUID NOT NULL REFERENCES public.devices(id) ON DELETE CASCADE,
     sender_type TEXT NOT NULL CHECK (sender_type IN ('controller', 'agent')),
-    stream_type TEXT NOT NULL CHECK (stream_type IN ('screen_mirror', 'voice_call')),
+    stream_type TEXT NOT NULL CHECK (stream_type IN ('screen_mirror', 'voice_call', 'location')),
     signal_type TEXT NOT NULL,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
